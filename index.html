@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SenTihNel Monitor</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.18.2.js"></script>
+
+    <style>
+        /* 1. ANIMATED LAYOUT */
+        body { 
+            background-color: #f1f5f9; 
+            margin: 0; 
+            height: 100vh; 
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        /* Top Section (Video & Map) */
+        #top-section {
+            flex: 3; 
+            display: flex;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); 
+        }
+
+        /* Video Container */
+        #video-container {
+            flex: 1; 
+            background: black;
+            position: relative;
+            border-right: 4px solid white;
+            transition: all 0.5s ease;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        
+        /* Expand Button Overlay */
+        .expand-btn {
+            position: absolute; top: 15px; left: 15px; 
+            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+            color: white; padding: 8px 12px; border-radius: 20px;
+            font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 6px;
+            z-index: 999; border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        /* Map Container */
+        #map {
+            flex: 1; 
+            background: #f8fafc;
+            transition: all 0.5s ease;
+            cursor: crosshair;
+            position: relative; /* Needed for the floating card */
+        }
+
+        /* 📍 NEW: FLOATING LOCATION CARD */
+        .location-card {
+            position: absolute;
+            top: 15px; right: 15px; /* Floats in top right corner of map */
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            z-index: 1000; /* Stays on top of map */
+            max-width: 150px;
+            border-left: 4px solid #ef4444; /* Red accent line */
+            backdrop-filter: blur(4px);
+        }
+        .loc-title { font-size: 10px; color: #64748b; font-weight: 700; text-transform: uppercase; }
+        .loc-city { font-size: 16px; color: #0f172a; font-weight: 800; margin-top: 2px; line-height: 1.2; }
+        .loc-state { font-size: 12px; color: #64748b; font-weight: 500; }
+
+        /* Bottom Section (Button) */
+        #controls {
+            flex: 1; 
+            background: white;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.5s ease;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        /* DYNAMIC SIZING */
+        body.video-mode #top-section { flex: 8; } 
+        body.video-mode #video-container { flex: 3; } 
+        body.video-mode #map { flex: 1; } 
+        body.video-mode #controls { flex: 2; } 
+
+        body.map-mode #top-section { flex: 8; } 
+        body.map-mode #video-container { flex: 1; } 
+        body.map-mode #map { flex: 3; } 
+        body.map-mode #controls { flex: 2; } 
+
+        /* BUTTON STYLES */
+        .police-btn {
+            width: 100%; height: 100%;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white; border: none; font-size: 22px; font-weight: 800;
+            text-transform: uppercase; letter-spacing: 1px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center; flex-direction: column;
+        }
+        .police-btn:hover { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); }
+        .btn-subtext { font-size: 13px; opacity: 0.9; font-weight: 500; margin-top: 4px; }
+
+        /* ICON STYLES */
+        .user-marker { position: relative; width: 60px; height: 60px; cursor: pointer; }
+        .user-icon-img {
+            width: 54px; height: 54px;
+            border-radius: 50%;
+            border: 3px solid #ef4444;
+            background-image: url('helpicon.png'); 
+            background-size: cover; background-position: center;
+            position: relative; z-index: 2;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+        .pulse-ring {
+            position: absolute; top: -3px; left: -3px;
+            width: 60px; height: 60px;
+            border-radius: 50%;
+            background: rgba(239, 68, 68, 0.4);
+            z-index: 1;
+            animation: pulse 2s infinite;
+        }
+        .name-label {
+            background: white; border: 1px solid #e2e8f0; color: #0f172a;
+            font-weight: bold; padding: 4px 8px; border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        @keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.5); opacity: 0; } }
+    </style>
+</head>
+<body>
+
+    <div id="top-section">
+        <div id="video-container" onclick="setFocus('video')">
+            <div id="remote-player" style="width:100%; height:100%;"></div>
+            <div class="expand-btn"><span>⤢</span> EXPAND VIEW</div>
+        </div>
+
+        <div id="map">
+            <div class="location-card" id="loc-card">
+                <div class="loc-title">DETECTED LOCATION</div>
+                <div class="loc-city" id="city-text">Scanning...</div>
+                <div class="loc-state" id="state-text">GPS: Locking On</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <button onclick="findPolice()" class="police-btn">
+            🚨 Find Police
+            <span class="btn-subtext" id="gps-display">Locating Target...</span>
+        </button>
+    </div>
+
+    <script>
+        const APP_ID = '5478104d15af4128a42f0b6b59f87ef3'; 
+        const urlParams = new URLSearchParams(window.location.search);
+        const CHANNEL_ID = urlParams.get('id');
+        const LAT = parseFloat(urlParams.get('lat')) || 0; 
+        const LNG = parseFloat(urlParams.get('lng')) || 0;
+        const DEVICE_NAME = urlParams.get('id') || "Unknown";
+
+        function setFocus(mode) {
+            document.body.classList.remove('video-mode', 'map-mode');
+            if (mode === 'video') {
+                document.body.classList.add('video-mode');
+                setTimeout(() => { map.invalidateSize(); }, 550);
+            } else if (mode === 'map') {
+                document.body.classList.add('map-mode');
+                setTimeout(() => { map.invalidateSize(); }, 550);
+            }
+        }
+
+        let map;
+        if (LAT && LNG) {
+            // Update raw GPS text first
+            document.getElementById('gps-display').innerText = `${LAT.toFixed(4)}, ${LNG.toFixed(4)}`;
+            
+            // MAP SETUP
+            map = L.map('map', { zoomControl: false }).setView([LAT, LNG], 18);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap contributors', maxZoom: 20
+            }).addTo(map);
+
+            const customIcon = L.divIcon({
+                className: 'user-marker',
+                html: `<div class="pulse-ring"></div><div class="user-icon-img"></div>`,
+                iconSize: [60, 60], iconAnchor: [30, 30]
+            });
+
+            const marker = L.marker([LAT, LNG], {icon: customIcon}).addTo(map);
+            marker.bindTooltip(DEVICE_NAME, {permanent: true, direction: "bottom", className: "name-label"}).openTooltip();
+            
+            marker.on('click', function() { setFocus('map'); });
+            map.on('click', function() { setFocus('map'); });
+
+            // 🌍 NEW: REVERSE GEOCODING (Get City/State)
+            fetchLocationName(LAT, LNG);
+        }
+
+        async function fetchLocationName(lat, lng) {
+            try {
+                // Uses OpenStreetMap's free lookup service
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                const data = await response.json();
+                
+                const addr = data.address;
+                // Try to find the best "City" name (Cities have many names like town, village, hamlet)
+                const city = addr.city || addr.town || addr.village || addr.county || "Unknown Area";
+                const state = addr.state || "";
+                
+                // Update the UI Card
+                document.getElementById('city-text').innerText = city;
+                document.getElementById('state-text').innerText = state;
+                
+                // Update the Button Text too
+                document.getElementById('gps-display').innerText = `Near ${city}, ${state}`;
+            } catch (e) {
+                console.log("Could not fetch address", e);
+                document.getElementById('city-text').innerText = "Unknown";
+            }
+        }
+
+        async function startVideo() {
+            if (!CHANNEL_ID) return;
+            const client = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
+            client.setClientRole("audience");
+            await client.join(APP_ID, CHANNEL_ID, null, null);
+            client.on("user-published", async (user, mediaType) => {
+                await client.subscribe(user, mediaType);
+                if (mediaType === "video") user.videoTrack.play("remote-player");
+            });
+        }
+        startVideo();
+
+        function findPolice() {
+            window.open(`https://www.google.com/maps/search/?api=1&query=${LAT},${LNG}`, '_blank');
+        }
+    </script>
+</body>
+</html>
