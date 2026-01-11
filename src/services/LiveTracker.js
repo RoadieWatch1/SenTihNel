@@ -1,7 +1,6 @@
 // 📂 FILE LOCATION: SenTihNel/src/services/LiveTracker.js
-// ✅ Updated for: Auth-required tracking + RLS-safe UPSERT + schema flags + safer keep-awake
-// ✅ IMPORTANT: This file now uses your shared Supabase client from src/lib/supabase
-// (Do NOT create a new client here — it can cause auth/session mismatches.)
+// ✅ Updated for: Added clearSOS and forceOneShotSync
+// ✅ IMPORTANT: This file uses your shared Supabase client from src/lib/supabase
 
 import * as Location from "expo-location";
 import * as Battery from "expo-battery";
@@ -12,6 +11,8 @@ import { supabase } from "../lib/supabase"; // ✅ uses the same client/session 
 
 const BACKGROUND_TASK_NAME = "BACKGROUND_LOCATION_TASK";
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
+const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
+const STORAGE_KEY_SOS = "sentinel_sos_active"; // ✅ Added SOS Key
 
 // ✅ Your DB now has these columns (after running your SQL):
 const SCHEMA_FLAGS = {
@@ -39,6 +40,7 @@ const TRACKING_PROFILES = {
 
 // State Tracking (Memory)
 let memoryDeviceId = null;
+let memoryGroupId = null;
 let isSending = false;
 let pendingLocation = null;
 let lastGoodCoords = null;
@@ -75,6 +77,50 @@ const safeGetDeviceId = async () => {
   return memoryDeviceId;
 };
 
+const safeGetGroupId = async () => {
+  if (memoryGroupId) return memoryGroupId;
+  const stored = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+  memoryGroupId = stored || null;
+  return memoryGroupId;
+};
+
+// ✅ SOS Helpers (Exported so UI/BatSignal can toggle)
+export const setSOSActive = async (active) => {
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY_SOS, active ? "1" : "0");
+  } catch (_) {}
+};
+
+// ✅ NEW: Clear SOS and reset status (Hidden Safe Cancel)
+export const clearSOS = async () => {
+  await setSOSActive(false);
+};
+
+// ✅ NEW: Force an immediate sync (used when clearing SOS to update DB instantly)
+export const forceOneShotSync = async () => {
+  try {
+    const hasPerm = await Location.getForegroundPermissionsAsync();
+    if (hasPerm.status !== "granted") return;
+
+    const loc = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Highest,
+    });
+
+    await handleLocationUpdate(loc);
+  } catch (e) {
+    console.log("🟡 forceOneShotSync failed (non-fatal):", e?.message || e);
+  }
+};
+
+const isSOSActive = async () => {
+  try {
+    const v = await AsyncStorage.getItem(STORAGE_KEY_SOS);
+    return v === "1";
+  } catch (_) {
+    return false;
+  }
+};
+
 // ✅ REQUIRE AUTH (prevents RLS spam when logged out)
 const requireSessionUser = async () => {
   try {
@@ -86,26 +132,8 @@ const requireSessionUser = async () => {
   }
 };
 
-// ✅ Optional guard: verify this device belongs to this user (matches our RLS design)
-// If RLS blocks this SELECT, it will return null — we just skip uploads until device exists.
-const deviceExistsForUser = async (deviceId) => {
-  try {
-    const { data, error } = await supabase
-      .from("devices")
-      .select("device_id")
-      .eq("device_id", deviceId)
-      .limit(1);
-
-    if (error) return false;
-    return Array.isArray(data) && data.length > 0;
-  } catch (_) {
-    return false;
-  }
-};
-
 /**
  * 1️⃣ DEFINE THE BACKGROUND TASK
- * Note: defineTask can throw during Fast Refresh if already defined, so we guard it.
  */
 try {
   TaskManager.defineTask(BACKGROUND_TASK_NAME, async ({ data, error }) => {
@@ -116,7 +144,6 @@ try {
     const locations = data?.locations;
     if (!locations || locations.length === 0) return;
 
-    // Use most recent
     const latestLocation = locations[locations.length - 1];
     await handleLocationUpdate(latestLocation);
   });
@@ -125,7 +152,7 @@ try {
 }
 
 /**
- * 2️⃣ SMART UPDATE HANDLER (latest-wins queue)
+ * 2️⃣ SMART UPDATE HANDLER
  */
 const handleLocationUpdate = async (location) => {
   const acc = location?.coords?.accuracy;
@@ -157,10 +184,9 @@ const handleLocationUpdate = async (location) => {
 };
 
 /**
- * 3️⃣ UPLOAD WORKER (Auth + RLS safe)
+ * 3️⃣ UPLOAD WORKER
  */
 const processUpload = async (location, { isPoorGps }) => {
-  // ✅ Must be logged in (your RLS policies require authenticated)
   const user = await requireSessionUser();
   if (!user) {
     const now = Date.now();
@@ -177,14 +203,7 @@ const processUpload = async (location, { isPoorGps }) => {
     return;
   }
 
-  // ✅ Ensure device row exists (and belongs to this user) before writing tracking
-  // If device doesn't exist yet, the tracking upsert will fail RLS.
-  const hasDevice = await deviceExistsForUser(deviceId);
-  if (!hasDevice) {
-    console.log("🟡 TRACKER: Device not registered yet — skipping upload.");
-    return;
-  }
-
+  const groupId = await safeGetGroupId();
   const batteryPercent = await safeGetBatteryPercent();
   const coords = location?.coords || {};
 
@@ -203,8 +222,14 @@ const processUpload = async (location, { isPoorGps }) => {
     battery_level: batteryPercent ?? -1,
   };
 
-  // Pro fields
-  setIfAllowed(payload, "status", "ACTIVE");
+  if (groupId) {
+    payload.group_id = groupId;
+  }
+
+  // ✅ Step 1.1C: Check SOS status dynamically
+  const sosOn = await isSOSActive();
+  setIfAllowed(payload, "status", sosOn ? "SOS" : "ACTIVE");
+
   setIfAllowed(payload, "last_updated", safeIsoNow());
   setIfAllowed(
     payload,
@@ -212,7 +237,6 @@ const processUpload = async (location, { isPoorGps }) => {
     typeof coords.accuracy === "number" ? Math.round(coords.accuracy) : null
   );
 
-  // Coordinates decision
   if (!isPoorGps && latitude != null && longitude != null) {
     payload.latitude = latitude;
     payload.longitude = longitude;
@@ -230,13 +254,13 @@ const processUpload = async (location, { isPoorGps }) => {
     return;
   }
 
+  // ✅ Step 1.1D: Detailed logging to verify SOS and Group ID
   console.log(
     `📡 SYNC [${payload.status || "ACTIVE"}]: ${payload.latitude?.toFixed(4)}, ${payload.longitude?.toFixed(
       4
-    )} | 🔋 ${payload.battery_level}%`
+    )} | 🔋 ${payload.battery_level}%${payload.group_id ? ` | 👥 ${payload.group_id}` : ""}`
   );
 
-  // ✅ UPSERT requires INSERT + UPDATE policies (you added those)
   const { error } = await supabase.from("tracking_sessions").upsert([payload], {
     onConflict: "device_id",
   });
@@ -251,7 +275,6 @@ const processUpload = async (location, { isPoorGps }) => {
 export const startLiveTracking = async (deviceId, mode = "SOS") => {
   console.log(`🚀 ACTIVATING STEALTH TRACKER: ${deviceId}`);
 
-  // Keep Awake can throw on some builds/dev states — don’t crash tracking
   try {
     await activateKeepAwakeAsync();
   } catch (e) {
@@ -261,7 +284,6 @@ export const startLiveTracking = async (deviceId, mode = "SOS") => {
   memoryDeviceId = deviceId;
   await AsyncStorage.setItem(STORAGE_KEY_DEVICE_ID, deviceId);
 
-  // Permissions
   const fg = await Location.requestForegroundPermissionsAsync();
   await Location.requestBackgroundPermissionsAsync();
 
@@ -270,7 +292,6 @@ export const startLiveTracking = async (deviceId, mode = "SOS") => {
     return;
   }
 
-  // Avoid duplicate starts
   const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK_NAME);
   if (alreadyRunning) {
     console.log("⚠️ TRACKER ALREADY RUNNING (Ensuring background task is fresh)");
@@ -281,19 +302,13 @@ export const startLiveTracking = async (deviceId, mode = "SOS") => {
 
   await Location.startLocationUpdatesAsync(BACKGROUND_TASK_NAME, {
     ...profile,
-
-    // iOS indicator (fine for dev; you can disable for production stealth decisions)
     showsBackgroundLocationIndicator: true,
-
-    // Android foreground service notification (required for background GPS)
     foregroundService: {
       notificationTitle: "System Security Active",
       notificationBody: "SenTihNel is protecting this device.",
       notificationColor: "#FF0000",
       killServiceOnTerminate: false,
     },
-
-    // Android persistence
     pausesUpdatesAutomatically: false,
     mayShowUserSettingsDialog: true,
   });
@@ -316,14 +331,14 @@ export const stopLiveTracking = async () => {
   }
 
   if (memoryDeviceId) {
-    // Only attempt OFFLINE write if logged in + device exists
     const user = await requireSessionUser();
-    const hasDevice = user ? await deviceExistsForUser(memoryDeviceId) : false;
-
-    if (user && hasDevice) {
+    if (user) {
       const offlinePayload = { device_id: memoryDeviceId };
       setIfAllowed(offlinePayload, "status", "OFFLINE");
       setIfAllowed(offlinePayload, "last_updated", safeIsoNow());
+
+      const groupId = await safeGetGroupId();
+      if (groupId) offlinePayload.group_id = groupId;
 
       await supabase.from("tracking_sessions").upsert([offlinePayload], {
         onConflict: "device_id",
@@ -331,9 +346,9 @@ export const stopLiveTracking = async () => {
     }
   }
 
-  // Cleanup
   await AsyncStorage.removeItem(STORAGE_KEY_DEVICE_ID);
   memoryDeviceId = null;
+  memoryGroupId = null;
   pendingLocation = null;
   isSending = false;
   lastGoodCoords = null;

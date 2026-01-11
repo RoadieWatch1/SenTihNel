@@ -1,5 +1,7 @@
+// 📂 FILE: src/services/BatSignal.js
 import * as Location from 'expo-location';
 import { Vibration } from 'react-native';
+import { setSOSActive, clearSOS, forceOneShotSync } from "./LiveTracker"; // ✅ Updated Imports
 
 // 🔴 CONFIGURATION
 // Updated to your new professional domain
@@ -17,6 +19,10 @@ export const registerForBatSignal = async () => {
 
 export const sendBatSignal = async (deviceId) => {
   console.log("🦇 BAT SIGNAL: ACTIVATING SILENT MODE...");
+  
+  // ✅ STEP 2: Flip the internal switch so the Tracker knows we are in danger
+  await setSOSActive(true);
+
   Vibration.vibrate([0, 50, 100, 50]); // Tactile confirmation
 
   try {
@@ -63,4 +69,12 @@ export const sendBatSignal = async (deviceId) => {
     console.error("❌ SIGNAL FAILED (Network Error):", error);
     return false;
   }
+};
+
+// ✅ NEW: Hidden Safe Cancel
+export const cancelBatSignal = async () => {
+  console.log("🟢 SOS CANCEL: Returning to ACTIVE mode...");
+  await clearSOS();
+  await forceOneShotSync(); // pushes ACTIVE immediately
+  return true;
 };

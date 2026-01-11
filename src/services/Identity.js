@@ -1,26 +1,63 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// 📂 FILE: src/services/Identity.js
+// ✅ SINGLE SOURCE OF TRUTH FOR DEVICE IDENTITY (stable + persistent)
 
-const ID_KEY = 'SENTIHNEL_DEVICE_ID';
+import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
+import * as Application from "expo-application";
 
-export const getDeviceId = async () => {
+const KEY = "sentinel_device_id";
+
+/**
+ * Returns a stable device identifier.
+ * Priority:
+ * 1) OS-native ID (Android ID / iOS vendor ID)
+ * 2) Expo installation ID (if available)
+ * 3) Persistent locally generated ID (fallback)
+ */
+export async function getDeviceId() {
+  // 1️⃣ Best: platform-native stable IDs
   try {
-    // 1. Check if we already have an ID saved
-    const existingId = await AsyncStorage.getItem(ID_KEY);
-    
-    if (existingId !== null) {
-      return existingId;
+    if (Platform.OS === "android") {
+      const androidId = await Application.getAndroidId();
+      if (androidId) return `android:${androidId}`;
     }
 
-    // 2. If not, generate a random 4-digit code (e.g. 8842)
-    const randomCode = Math.floor(1000 + Math.random() * 9000); 
-    const newId = `Device-${randomCode}`;
-    
-    // 3. Save it forever on this phone
-    await AsyncStorage.setItem(ID_KEY, newId);
-    return newId;
-    
-  } catch (e) {
-    console.error("Error creating ID", e);
-    return "Device-0000"; // Fallback
+    if (Platform.OS === "ios") {
+      const iosId = await Application.getIosIdForVendorAsync();
+      if (iosId) return `ios:${iosId}`;
+    }
+  } catch (err) {
+    console.log("Device native ID unavailable:", err?.message);
   }
-};
+
+  // 2️⃣ Expo installationId (sometimes present depending on SDK/build)
+  const expoInstallId =
+    Constants?.installationId ||
+    Constants?.expoConfig?.extra?.installationId ||
+    null;
+
+  if (expoInstallId) {
+    return `expo:${expoInstallId}`;
+  }
+
+  // 3️⃣ Fallback: persistent locally generated ID
+  try {
+    let storedId = await AsyncStorage.getItem(KEY);
+
+    if (!storedId) {
+      const random =
+        globalThis.crypto?.randomUUID?.() ||
+        `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+
+      storedId = `local:${random}`;
+      await AsyncStorage.setItem(KEY, storedId);
+    }
+
+    return storedId;
+  } catch (e) {
+    console.error("Error creating/storing device ID", e);
+    // absolute last-resort fallback (should be rare)
+    return `local:${Date.now()}-fallback`;
+  }
+}

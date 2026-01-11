@@ -4,16 +4,22 @@ import { View, Text, TouchableOpacity, StatusBar, StyleSheet, BackHandler, Platf
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons"; // ✅ Added Icon Import
 
 // --- Imports ---
 import WakeWordListener from "../../src/components/WakeWordListener";
 import StealthStreamer from "../../src/components/StealthStreamer";
-import { sendBatSignal, registerForBatSignal } from "../../src/services/BatSignal";
+import { sendBatSignal, registerForBatSignal, cancelBatSignal } from "../../src/services/BatSignal";
 import FakeLockScreen from "../../src/components/FakeLockScreen";
 import { startLiveTracking } from "../../src/services/LiveTracker";
 
 // ✅ Must match Auth + LiveTracker key
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
+
+// ✅ Constants for Hidden Cancel Gesture
+const STORAGE_KEY_SOS = "sentinel_sos_active";
+const TAP_WINDOW_MS = 3000;
+const TAP_TARGET = 7;
 
 export default function HomePage() {
   const navigation = useNavigation();
@@ -23,6 +29,10 @@ export default function HomePage() {
 
   const bootedRef = useRef(false);
   const sosLockRef = useRef(false);
+
+  // ✅ Hidden Tap State
+  const [tapCount, setTapCount] = useState(0);
+  const tapStartRef = useRef(0);
 
   useEffect(() => {
     if (bootedRef.current) return;
@@ -91,14 +101,64 @@ export default function HomePage() {
     }
   };
 
+  // ✅ Hidden Cancel Handler
+  const handleHiddenCancelTap = async () => {
+    const now = Date.now();
+
+    // Start/reset the tap window
+    if (!tapStartRef.current || now - tapStartRef.current > TAP_WINDOW_MS) {
+      tapStartRef.current = now;
+      setTapCount(1);
+      return;
+    }
+
+    // Continue counting taps within the window
+    const next = tapCount + 1;
+    setTapCount(next);
+
+    if (next >= TAP_TARGET) {
+      tapStartRef.current = 0;
+      setTapCount(0);
+
+      console.log("🕵️ HIDDEN GESTURE DETECTED: Checking SOS status...");
+
+      // Only cancel if SOS is actually active (prevents accidental triggers)
+      const sosVal = await AsyncStorage.getItem(STORAGE_KEY_SOS);
+      const sosOn = sosVal === "1";
+      if (!sosOn) {
+        console.log("🕵️ SOS not active, ignoring gesture.");
+        return;
+      }
+
+      await cancelBatSignal();
+    }
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
       <StatusBar barStyle="light-content" hidden={isSOS} />
 
-      {/* Stealth drawer button only when not in SOS */}
+      {/* ✅ UPDATED MENU BUTTON (New Pro Style) */}
       {!isSOS && (
-        <TouchableOpacity onPress={openDrawer} style={styles.drawerButtonWrap} activeOpacity={0.6}>
-          <Text style={styles.drawerIcon}>≡</Text>
+        <TouchableOpacity
+          onPress={openDrawer}
+          style={{
+            position: "absolute",
+            top: 50,
+            left: 18,
+            zIndex: 100,
+            padding: 12,                 // BIG tap target
+            borderRadius: 20,
+            backgroundColor: "rgba(255,255,255,0.08)", // subtle visibility
+            marginLeft: 6,
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="menu"
+            size={28}                    // bigger than before
+            color="#e5e7eb"              // light gray / near white
+          />
         </TouchableOpacity>
       )}
 
@@ -113,7 +173,10 @@ export default function HomePage() {
         <SafeAreaView style={styles.container}>
           <WakeWordListener onTrigger={triggerSOS} />
 
-          <Text style={styles.title}>Device Health</Text>
+          {/* ✅ Hidden Cancel Button (7 taps on Header) */}
+          <TouchableOpacity activeOpacity={1} onPress={handleHiddenCancelTap}>
+            <Text style={styles.title}>Device Health</Text>
+          </TouchableOpacity>
 
           <View style={styles.statusBox}>
             <Text style={styles.statusLabel}>SYSTEM STATUS</Text>
@@ -136,25 +199,7 @@ export default function HomePage() {
 }
 
 const styles = StyleSheet.create({
-  drawerButtonWrap: {
-    position: "absolute",
-    top: 50,
-    left: 18,
-    zIndex: 100,
-    opacity: 0.35, // stealth
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(15,23,42,0.35)",
-  },
-  drawerIcon: {
-    color: "#94a3b8",
-    fontSize: 22,
-    fontWeight: "800",
-    lineHeight: 22,
-  },
+  // drawerButtonWrap removed (replaced with inline styles above)
 
   container: { flex: 1, backgroundColor: "#0f172a", alignItems: "center", justifyContent: "center" },
   title: { color: "white", fontSize: 32, fontWeight: "600", marginBottom: 40 },
