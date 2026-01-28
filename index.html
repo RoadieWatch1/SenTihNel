@@ -1,248 +1,1747 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SenTihNel Monitor</title>
-    
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.18.2.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SenTihNel — Guardian Command</title>
 
-    <style>
-        /* 1. ANIMATED LAYOUT */
-        body { 
-            background-color: #f1f5f9; 
-            margin: 0; 
-            height: 100vh; 
-            display: flex; 
-            flex-direction: column; 
-            overflow: hidden; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
+  <!-- ✅ MapLibre GL JS -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 
-        /* Top Section (Video & Map) */
-        #top-section {
-            flex: 3; 
-            display: flex;
-            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); 
-        }
+  <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.18.2.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 
-        /* Video Container */
-        #video-container {
-            flex: 1; 
-            background: black;
-            position: relative;
-            border-right: 4px solid white;
-            transition: all 0.5s ease;
-            cursor: pointer;
-            overflow: hidden;
-        }
-        
-        /* Expand Button Overlay */
-        .expand-btn {
-            position: absolute; top: 15px; left: 15px; 
-            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
-            color: white; padding: 8px 12px; border-radius: 20px;
-            font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 6px;
-            z-index: 999; border: 1px solid rgba(255,255,255,0.2);
-        }
+  <!-- ✅ Cyber fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 
-        /* Map Container */
-        #map {
-            flex: 1; 
-            background: #f8fafc;
-            transition: all 0.5s ease;
-            cursor: crosshair;
-            position: relative; /* Needed for the floating card */
-        }
+  <style>
+    :root {
+      --bg: #020408;
+      --panel-bg: rgba(5, 10, 20, 0.88);
+      --border: rgba(0, 243, 255, 0.16);
 
-        /* 📍 NEW: FLOATING LOCATION CARD */
-        .location-card {
-            position: absolute;
-            top: 15px; right: 15px; /* Floats in top right corner of map */
-            background: rgba(255, 255, 255, 0.95);
-            padding: 10px 15px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-            z-index: 1000; /* Stays on top of map */
-            max-width: 150px;
-            border-left: 4px solid #ef4444; /* Red accent line */
-            backdrop-filter: blur(4px);
-        }
-        .loc-title { font-size: 10px; color: #64748b; font-weight: 700; text-transform: uppercase; }
-        .loc-city { font-size: 16px; color: #0f172a; font-weight: 800; margin-top: 2px; line-height: 1.2; }
-        .loc-state { font-size: 12px; color: #64748b; font-weight: 500; }
+      --accent: #00f3ff;
+      --danger: #ff003c;
+      --success: #00ff9d;
 
-        /* Bottom Section (Button) */
-        #controls {
-            flex: 1; 
-            background: white;
-            display: flex;
-            flex-direction: column;
-            transition: all 0.5s ease;
-            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
-            z-index: 1000;
-        }
+      --text-main: #e0f7ff;
+      --text-muted: rgba(0, 243, 255, 0.62);
 
-        /* DYNAMIC SIZING */
-        body.video-mode #top-section { flex: 8; } 
-        body.video-mode #video-container { flex: 3; } 
-        body.video-mode #map { flex: 1; } 
-        body.video-mode #controls { flex: 2; } 
+      --font-ui: 'Rajdhani', sans-serif;
+      --font-mono: 'Share Tech Mono', monospace;
 
-        body.map-mode #top-section { flex: 8; } 
-        body.map-mode #video-container { flex: 1; } 
-        body.map-mode #map { flex: 3; } 
-        body.map-mode #controls { flex: 2; } 
+      --hud-teal: rgba(0, 243, 255, 0.92);
 
-        /* BUTTON STYLES */
-        .police-btn {
-            width: 100%; height: 100%;
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            color: white; border: none; font-size: 22px; font-weight: 800;
-            text-transform: uppercase; letter-spacing: 1px;
-            cursor: pointer;
-            display: flex; align-items: center; justify-content: center; flex-direction: column;
-        }
-        .police-btn:hover { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); }
-        .btn-subtext { font-size: 13px; opacity: 0.9; font-weight: 500; margin-top: 4px; }
+      /* ✅ ORANGE/YELLOW STREET LABELS */
+      --hud-label-warm: rgba(255, 185, 80, 0.98);
+      --hud-label-halo: rgba(0, 0, 0, 0.82);
 
-        /* ICON STYLES */
-        .user-marker { position: relative; width: 60px; height: 60px; cursor: pointer; }
-        .user-icon-img {
-            width: 54px; height: 54px;
-            border-radius: 50%;
-            border: 3px solid #ef4444;
-            background-image: url('helpicon.png'); 
-            background-size: cover; background-position: center;
-            position: relative; z-index: 2;
-            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
-        }
-        .pulse-ring {
-            position: absolute; top: -3px; left: -3px;
-            width: 60px; height: 60px;
-            border-radius: 50%;
-            background: rgba(239, 68, 68, 0.4);
-            z-index: 1;
-            animation: pulse 2s infinite;
-        }
-        .name-label {
-            background: white; border: 1px solid #e2e8f0; color: #0f172a;
-            font-weight: bold; padding: 4px 8px; border-radius: 6px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        @keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.5); opacity: 0; } }
-    </style>
+      /* ✅ Teal/blue buildings */
+      --hud-building-fill: rgba(0, 243, 255, 0.16);
+      --hud-building-edge: rgba(0, 243, 255, 0.30);
+      --hud-building-extrude: rgba(0, 243, 255, 0.18);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background-color: var(--bg);
+      font-family: var(--font-ui);
+      color: var(--text-main);
+      display: flex;
+    }
+
+    .vignette {
+      position: fixed; inset: 0; z-index: 1; pointer-events: none;
+      background: radial-gradient(circle at center, transparent 40%, #000 130%);
+    }
+    .scanlines {
+      position: fixed; inset: 0; z-index: 2; pointer-events: none;
+      background: linear-gradient(
+        to bottom,
+        rgba(255,255,255,0),
+        rgba(255,255,255,0) 50%,
+        rgba(0,0,0,0.12) 50%,
+        rgba(0,0,0,0.12)
+      );
+      background-size: 100% 4px;
+      opacity: 0.28;
+      mix-blend-mode: overlay;
+    }
+    .noise {
+      position: fixed;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      opacity: 0.06;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+      background-size: 240px 240px;
+      mix-blend-mode: overlay;
+    }
+
+    .app-container {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      grid-template-columns: 1fr 420px;
+      width: 100%;
+      height: 100%;
+    }
+
+    .map-section {
+      position: relative;
+      background: #020617;
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #map { width: 100%; height: 100%; z-index: 1; }
+
+    .maplibregl-ctrl-attrib,
+    .maplibregl-ctrl-logo { display: none !important; }
+
+    .hud-overlay { position: absolute; inset: 0; z-index: 120; pointer-events: none; }
+
+    .hud-corners {
+      position: absolute; inset: 20px;
+      border: 1px solid rgba(0, 243, 255, 0.12);
+      box-shadow:
+        0 0 20px rgba(0, 243, 255, 0.06),
+        inset 0 0 30px rgba(0, 243, 255, 0.04);
+      clip-path: polygon(
+        0 0, 20px 0, 20px 1px, calc(100% - 20px) 1px, calc(100% - 20px) 0, 100% 0,
+        100% 20px, calc(100% - 1px) 20px, calc(100% - 1px) calc(100% - 20px), 100% calc(100% - 20px), 100% 100%,
+        calc(100% - 20px) 100%, calc(100% - 20px) calc(100% - 1px), 20px calc(100% - 1px), 20px 100%, 0 100%,
+        0 calc(100% - 20px), 1px calc(100% - 20px), 1px 20px, 0 20px
+      );
+    }
+
+    .hud-top {
+      position: absolute;
+      top: 25px; left: 25px; right: 25px;
+      z-index: 150;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      gap: 12px;
+    }
+
+    .hud-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 18px;
+      background: rgba(5, 10, 20, 0.86);
+      border: 1px solid var(--accent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      transform: skewX(-15deg);
+      box-shadow: 0 0 15px rgba(0, 243, 255, 0.12);
+    }
+    .hud-chip > * { transform: skewX(15deg); }
+
+    .hud-live .bars {
+      width: 20px; height: 16px;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;
+    }
+    .hud-live .bars span {
+      background: var(--danger);
+      animation: bars 0.8s infinite alternate;
+      box-shadow: 0 0 10px rgba(255,0,60,0.35);
+    }
+    .hud-live .bars span:nth-child(2) { animation-delay: 0.2s; }
+    .hud-live .bars span:nth-child(3) { animation-delay: 0.4s; }
+
+    .hud-live .label {
+      font-weight: 700;
+      font-size: 20px;
+      color: var(--danger);
+      letter-spacing: 2px;
+      text-shadow: 0 0 10px rgba(255,0,60,0.45);
+    }
+
+    .hud-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 18px;
+      background: rgba(5, 10, 20, 0.86);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transform: skewX(-15deg);
+      box-shadow: 0 0 15px rgba(0, 243, 255, 0.12);
+      max-width: 60vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hud-right > * { transform: skewX(15deg); }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      background: var(--accent);
+      box-shadow: 0 0 12px rgba(0,243,255,0.65);
+      animation: blink 1s infinite;
+    }
+
+    .hud-bottom-strip {
+      position: absolute;
+      bottom: 25px; left: 0; right: 0;
+      z-index: 140;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .strip {
+      background: rgba(0,0,0,0.75);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 8px 24px;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      clip-path: polygon(15px 0, 100% 0, 100% 100%, 0 100%, 0 15px);
+      box-shadow: 0 0 18px rgba(0,243,255,0.12);
+    }
+
+    .sidebar {
+      background: rgba(3, 5, 10, 0.96);
+      border-left: 1px solid rgba(0, 243, 255, 0.2);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      box-shadow: -10px 0 40px rgba(0,0,0,0.8);
+    }
+
+    .panel { padding: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+
+    .panel-title {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      letter-spacing: 3px;
+      margin-bottom: 15px;
+      display: block;
+      text-shadow: 0 0 8px rgba(0, 243, 255, 0.35);
+    }
+
+    /* ✅ CAMERA TOGGLE */
+    .cam-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .cam-tab {
+      width: 100%;
+      background: rgba(0,243,255,0.06);
+      color: rgba(0,243,255,0.92);
+      border: 1px solid rgba(0,243,255,0.55);
+      padding: 12px 10px;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: all 0.18s;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .cam-tab.active {
+      background: rgba(0,243,255,0.86);
+      color: #000;
+      box-shadow: 0 0 22px rgba(0,243,255,0.26);
+    }
+    .cam-tab:active { transform: scale(0.99); }
+
+    /* ✅ SINGLE VIDEO TILE (one plays at a time) */
+    .video-tile {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #000;
+      position: relative;
+      border: 1px solid var(--accent);
+      box-shadow: 0 0 20px rgba(0, 243, 255, 0.10);
+      clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+      overflow: hidden;
+    }
+
+    .video-label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 15;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid rgba(0,243,255,0.55);
+      color: rgba(0,243,255,0.92);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 2px;
+      padding: 6px 10px;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    #remote-player {
+      width: 100%;
+      height: 100%;
+    }
+
+    .video-overlay {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.82);
+      z-index: 10; pointer-events: none;
+    }
+    .video-status-text {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: center;
+      padding: 0 14px;
+      line-height: 1.35;
+    }
+    .video-loader {
+      width: 28px; height: 28px;
+      border: 2px solid var(--accent);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    .control-note {
+      margin-top: 10px;
+      font-size: 10px;
+      color: rgba(0,243,255,0.65);
+      font-family: 'Share Tech Mono', monospace;
+      letter-spacing: 1px;
+      line-height: 1.4;
+    }
+
+    .police-hero-btn {
+      width: 100%;
+      background: linear-gradient(90deg, rgba(255,0,60,0.18), rgba(255,0,60,0.05));
+      color: #ff8fa3;
+      border: 1px solid rgba(255,0,60,0.65);
+      padding: 18px;
+      font-family: var(--font-ui);
+      font-size: 16px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.2s;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    }
+    .police-hero-btn:hover {
+      background: rgba(255,0,60,0.85);
+      color: #000;
+      box-shadow: 0 0 25px rgba(255,0,60,0.35);
+    }
+    .police-hero-btn:active { transform: scale(0.98); }
+
+    .police-list { margin-top: 15px; display: flex; flex-direction: column; gap: 10px; }
+
+    .station-card {
+      background: rgba(0, 243, 255, 0.05);
+      padding: 12px;
+      border-left: 2px solid var(--accent);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .station-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .station-meta {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 10px;
+      color: rgba(0,243,255,0.75);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .station-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .call-btn {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid rgba(0,243,255,0.65);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 11px;
+      padding: 6px 12px;
+      text-decoration: none;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      transition: 0.2s;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .call-btn:hover { background: var(--accent); color: #000; }
+
+    .call-btn.alt {
+      border-color: rgba(232,150,55,0.9);
+      color: rgba(255, 185, 80, 0.98);
+    }
+    .call-btn.alt:hover {
+      background: rgba(255, 185, 80, 0.98);
+      color: #000;
+    }
+
+    .rec-btn {
+      width: 100%;
+      background: transparent;
+      border: 1px solid rgba(255,0,60,0.75);
+      color: rgba(255,0,60,0.95);
+      padding: 15px;
+      font-family: var(--font-ui);
+      font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      text-transform: uppercase;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 15px 100%, 0 calc(100% - 15px));
+    }
+    .rec-btn:hover { background: rgba(255,0,60,0.10); }
+    .rec-btn.recording {
+      background: rgba(255,0,60,0.92);
+      color: #000;
+      animation: pulse-red 1.5s infinite;
+    }
+
+    /* MARKER */
+    .user-marker { position: relative; width: 80px; height: 80px; }
+    .pulse-ring {
+      position: absolute;
+      top: 10px; left: 10px;
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,0,60,0.85);
+      box-shadow: 0 0 20px rgba(255,0,60,0.35);
+      animation: pulse 2s infinite;
+    }
+    .user-icon-img {
+      position: absolute;
+      top: 15px; left: 15px;
+      width: 50px; height: 50px;
+      background: rgba(255,0,60,0.92);
+      color: #000;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      box-shadow: 0 0 15px rgba(255,0,60,0.35);
+      letter-spacing: 2px;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+    }
+    .user-icon-img.active {
+      background: rgba(0,243,255,0.92);
+      box-shadow: 0 0 15px rgba(0,243,255,0.35);
+    }
+    .pulse-ring.active {
+      border: 1px solid rgba(0,243,255,0.85);
+      box-shadow: 0 0 20px rgba(0,243,255,0.30);
+    }
+
+    .coord-holo {
+      position: absolute;
+      left: 75px;
+      top: 10px;
+      background: rgba(2, 4, 8, 0.88);
+      border: 1px solid rgba(0,243,255,0.65);
+      padding: 8px 12px;
+      min-width: 210px;
+      box-shadow: 5px 5px 15px rgba(0,0,0,0.5);
+    }
+    .coord-holo .coord-title {
+      font-size: 9px;
+      color: rgba(0,243,255,0.9);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      font-family: 'Share Tech Mono', monospace;
+    }
+    .coord-holo .coord-text {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 16px;
+      color: rgba(255,255,255,0.95);
+      text-shadow: 0 0 8px rgba(0,243,255,0.35);
+    }
+    .coord-holo .coord-sub {
+      margin-top: 4px;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 10px;
+      color: rgba(0,243,255,0.70);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 260px;
+    }
+
+    @media (max-width: 900px) {
+      .app-container { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+
+      .sidebar {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        max-height: 88vh;
+        height: auto;
+        transform: translateY(calc(100% - 60px));
+        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+        border-top: 2px solid rgba(0,243,255,0.75);
+        border-left: none;
+        z-index: 500;
+      }
+      .sidebar.open { transform: translateY(0); }
+
+      .sheet-handle {
+        width: 100%;
+        padding: 15px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: rgba(5, 10, 20, 0.98);
+        cursor: pointer;
+      }
+      .handle-bar { width: 40px; height: 4px; background: rgba(0,243,255,0.85); border-radius: 2px; }
+      .handle-text { font-size: 10px; color: rgba(0,243,255,0.85); letter-spacing: 2px; margin-top: 8px; text-transform: uppercase; font-family: 'Share Tech Mono', monospace; }
+
+      .hud-right { max-width: 60vw; font-size: 11px; }
+    }
+
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    @keyframes pulse-red { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+    @keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    @keyframes bars { 0%{height:20%} 100%{height:100%} }
+  </style>
 </head>
+
 <body>
+  <div class="vignette"></div>
+  <div class="scanlines"></div>
+  <div class="noise"></div>
 
-    <div id="top-section">
-        <div id="video-container" onclick="setFocus('video')">
-            <div id="remote-player" style="width:100%; height:100%;"></div>
-            <div class="expand-btn"><span>⤢</span> EXPAND VIEW</div>
+  <div class="app-container">
+    <div class="map-section">
+      <div id="map"></div>
+
+      <div class="hud-overlay">
+        <div class="hud-corners"></div>
+      </div>
+
+      <div class="hud-top">
+        <div class="hud-chip hud-live">
+          <div class="bars"><span></span><span></span><span></span></div>
+          <div class="label">LIVE</div>
         </div>
 
-        <div id="map">
-            <div class="location-card" id="loc-card">
-                <div class="loc-title">DETECTED LOCATION</div>
-                <div class="loc-city" id="city-text">Scanning...</div>
-                <div class="loc-state" id="state-text">GPS: Locking On</div>
+        <div class="hud-right">
+          <div class="status-dot"></div>
+          <span id="hud-top-status">WAITING FOR SIGNAL...</span>
+        </div>
+      </div>
+
+      <div class="hud-bottom-strip">
+        <div class="strip" id="hud-bottom-strip">GUARDIAN COMMAND • ACTIVE LINK</div>
+      </div>
+    </div>
+
+    <div class="sidebar" id="sidebar">
+      <div class="sheet-handle" onclick="toggleSheet()">
+        <div class="handle-bar"></div>
+        <div class="handle-text">▲ SLIDE UP FOR INTEL</div>
+      </div>
+
+      <div class="panel">
+        <span class="panel-title">Live Feed (Camera Select)</span>
+
+        <div class="cam-switch" style="display: none;"></div>
+
+        <div class="video-tile">
+          <div class="video-label" id="video-label">FRONT CAM</div>
+          <div id="remote-player"></div>
+          <div class="video-overlay" id="video-overlay">
+            <div class="video-loader"></div>
+            <div class="video-status-text" id="video-text">
+              WAITING FOR FRONT CAM...
             </div>
+          </div>
         </div>
-    </div>
 
-    <div id="controls">
-        <button onclick="findPolice()" class="police-btn">
-            🚨 Find Police
-            <span class="btn-subtext" id="gps-display">Locating Target...</span>
+        <div class="control-note">
+          Plays ONE camera at a time (stronger stability). For true switching, SOS phone should publish two streams:
+          <br/>UID example: <b>DEVICE_ID:back</b> and <b>DEVICE_ID:front</b>.
+        </div>
+      </div>
+
+      <div class="panel">
+        <span class="panel-title">Emergency Response</span>
+        <button class="police-hero-btn" onclick="retryScan()">
+          🚨 SCAN FOR POLICE (NEAREST)
         </button>
+
+        <div class="police-list" id="list-content">
+          <div style="padding:10px; text-align:center; font-size:12px; color:var(--text-muted); font-family:'Share Tech Mono', monospace;">
+            Waiting for GPS Lock...
+          </div>
+        </div>
+
+        <div style="margin-top:12px; font-size:10px; color:rgba(0,243,255,0.65); font-family:'Share Tech Mono', monospace; letter-spacing:1px; line-height:1.4;">
+          TIP: If you are in a different state than the SOS location, avoid calling 911 (it may route to your local dispatch).
+          Use the nearest station direct line shown below or open the station in Maps.
+        </div>
+      </div>
+
+      <div class="panel">
+        <span class="panel-title">Evidence Recording</span>
+        <button class="rec-btn" id="rec-btn" onclick="toggleRecording()">
+          ⏺️ RECORD LIVE FEED
+        </button>
+        <div id="rec-timer" style="text-align:center; margin-top:10px; font-family:'Share Tech Mono', monospace; font-weight:700; color:var(--text-muted); letter-spacing:1px;">00:00:00</div>
+
+        <div id="download-area" style="margin-top:12px;"></div>
+
+        <p style="font-size: 10px; color: var(--text-muted); margin-top: 10px; text-align: center; font-family:'Share Tech Mono', monospace;">
+          Records the currently viewed camera. Saved as WebM (VP8/Opus when available) so it plays reliably.
+        </p>
+      </div>
     </div>
+  </div>
 
-    <script>
-        const APP_ID = '5478104d15af4128a42f0b6b59f87ef3'; 
-        const urlParams = new URLSearchParams(window.location.search);
-        const CHANNEL_ID = urlParams.get('id');
-        const LAT = parseFloat(urlParams.get('lat')) || 0; 
-        const LNG = parseFloat(urlParams.get('lng')) || 0;
-        const DEVICE_NAME = urlParams.get('id') || "Unknown";
+  <script>
+    // 🔴 CONFIGURATION
+    const APP_ID = '5478104d15af4128a42f0b6b59f87ef3';
+    const SUPABASE_URL = 'https://yjnqyzozvrgajavndgbm.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_t3KmD3g6zK3c-4cyzGMrQw_carXwjUq';
 
-        function setFocus(mode) {
-            document.body.classList.remove('video-mode', 'map-mode');
-            if (mode === 'video') {
-                document.body.classList.add('video-mode');
-                setTimeout(() => { map.invalidateSize(); }, 550);
-            } else if (mode === 'map') {
-                document.body.classList.add('map-mode');
-                setTimeout(() => { map.invalidateSize(); }, 550);
+    const MAPTILER_KEY = 'oQ9e8JJpYONS3qpqUGq7';
+    const STYLE_ORDER = ['darkmatter', 'dataviz-dark', 'toner-v2', 'streets-v2'];
+
+    // If SOS publisher enables dual-stream (recommended), audience can request low stream for stability.
+    const PREFER_LOW_STREAM = true; // reduces freeze risk on weaker networks
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const DEVICE_ID = urlParams.get('id');
+
+    const URL_LAT = Number(urlParams.get('lat'));
+    const URL_LNG = Number(urlParams.get('lng'));
+    const HAS_URL_COORDS = Number.isFinite(URL_LAT) && Number.isFinite(URL_LNG);
+
+    const DEFAULT_CENTER = [-84.3880, 33.7490]; // Atlanta
+
+    const STYLE_OVERRIDE = (urlParams.get('style') || '').trim();
+    const FINAL_STYLE_ORDER = STYLE_OVERRIDE ? [STYLE_OVERRIDE, ...STYLE_ORDER] : [...STYLE_ORDER];
+
+    // --- Police scanning tuning ---
+    const POLICE_SCAN_RADIUS_M = 50000;
+    const POLICE_MAX_RESULTS = 6;
+
+    const OVERPASS_ENDPOINTS = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.nchc.org.tw/api/interpreter'
+    ];
+
+    // STATE
+    let map, marker, markerEl;
+
+    // Evidence recording
+    let isRecording = false;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recInterval = null;
+    let recStartTime = 0;
+
+    // Police scan state
+    let policeScanInFlight = false;
+
+    // Agora state
+    let agoraClient = null;
+    let remoteAudioTrack = null;
+
+    // Store both camera tracks (if published)
+    // Store only the front camera track
+    const camTracks = {
+      front: null,
+    };
+
+    // Only one camera UID (front)
+    let cameraUid = null;
+
+    // Only front camera is displayed
+    const activeCam = 'front';
+
+    // Watchdog (freeze recovery)
+    let freezeTimer = null;
+    let freezeStallCount = 0;
+    let freezeLastTime = -1;
+    let rejoinInFlight = false;
+    let rejoinAttempt = 0;
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    function setTopStatus(text) {
+      const el = document.getElementById('hud-top-status');
+      if (el) el.textContent = text;
+    }
+
+    function setBottomStrip(text) {
+      const el = document.getElementById('hud-bottom-strip');
+      if (el) el.textContent = text;
+    }
+
+    function pad2(n) { return String(n).padStart(2,'0'); }
+
+    function formatAge(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return 'UNKNOWN';
+      const sec = Math.floor(ms / 1000);
+      if (sec < 60) return `${sec}s AGO`;
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}m AGO`;
+      const hr = Math.floor(min / 60);
+      return `${hr}h AGO`;
+    }
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderMarkerHtml(lat, lng, mode, subline) {
+      const safeLat = Number.isFinite(lat) ? lat : Number(lat) || 0;
+      const safeLng = Number.isFinite(lng) ? lng : Number(lng) || 0;
+      const coordText = `${safeLat.toFixed(5)} , ${safeLng.toFixed(5)}`;
+
+      const isSOS = String(mode || '').toUpperCase() === 'SOS';
+      const ringClass = isSOS ? '' : 'active';
+      const iconClass = isSOS ? '' : 'active';
+      const label = isSOS ? 'SOS' : 'LIVE';
+
+      return `
+        <div class="pulse-ring ${ringClass}"></div>
+        <div class="user-icon-img ${iconClass}">${label}</div>
+        <div class="coord-holo">
+          <div class="coord-title">Coordinates</div>
+          <div class="coord-text">${coordText}</div>
+          <div class="coord-sub">${escapeHtml(subline || '')}</div>
+        </div>
+      `;
+    }
+
+    function ensureMarker(lat, lng, mode, subline) {
+      if (!markerEl) {
+        markerEl = document.createElement('div');
+        markerEl.className = 'user-marker';
+      }
+      markerEl.innerHTML = renderMarkerHtml(lat, lng, mode, subline);
+
+      if (!marker) {
+        marker = new maplibregl.Marker({ element: markerEl, anchor: 'center' })
+          .setLngLat([lng, lat])
+          .addTo(map);
+      } else {
+        marker.setLngLat([lng, lat]);
+      }
+    }
+
+    function maptilerStyleUrl(styleId) {
+      return `https://api.maptiler.com/maps/${encodeURIComponent(styleId)}/style.json?key=${MAPTILER_KEY}`;
+    }
+
+    function initMap() {
+      const initialCenter = HAS_URL_COORDS ? [URL_LNG, URL_LAT] : DEFAULT_CENTER;
+
+      // ✅ pull back ~10% vs previous
+      const initialZoom = HAS_URL_COORDS ? 19.0 : 13.6;
+
+      map = new maplibregl.Map({
+        container: 'map',
+        style: maptilerStyleUrl(FINAL_STYLE_ORDER[0]),
+        center: initialCenter,
+        zoom: initialZoom,
+        maxZoom: 22,
+        minZoom: 2,
+        pitch: HAS_URL_COORDS ? 62 : 55,
+        bearing: HAS_URL_COORDS ? -18 : -12,
+        antialias: true,
+        attributionControl: false
+      });
+
+      let styleIndex = 0;
+      map.on('error', (e) => {
+        const msg = String((e && e.error && e.error.message) || '');
+        const isStyleProblem =
+          msg.includes('style') ||
+          msg.includes('403') ||
+          msg.includes('401') ||
+          msg.toLowerCase().includes('not found');
+
+        if (!isStyleProblem) return;
+
+        styleIndex++;
+        if (styleIndex >= FINAL_STYLE_ORDER.length) {
+          setTopStatus('MAP STYLE ERROR');
+          setBottomStrip('CHECK MAPTILER KEY / STYLE ID');
+          return;
+        }
+
+        try {
+          map.setStyle(maptilerStyleUrl(FINAL_STYLE_ORDER[styleIndex]));
+        } catch (_) {}
+      });
+
+      map.on('load', () => {
+        try { applyHudStyle(); } catch (e) {}
+
+        if (HAS_URL_COORDS) {
+          ensureMarker(URL_LAT, URL_LNG, 'SOS', 'LAST KNOWN');
+          setTopStatus('WAITING FOR SIGNAL...');
+          setBottomStrip('LIVE VIEW • LAST KNOWN COORDINATES');
+          fetchLocationName(URL_LAT, URL_LNG);
+
+          setTimeout(() => { retryScan(); }, 300);
+        } else {
+          fetchLocationName(DEFAULT_CENTER[1], DEFAULT_CENTER[0]);
+          setTimeout(() => { retryScan(); }, 300);
+        }
+      });
+
+      map.on('styledata', () => {
+        try { applyHudStyle(); } catch (e) {}
+      });
+    }
+
+    function applyHudStyle() {
+      if (!map || !map.getStyle || !map.isStyleLoaded()) return;
+
+      try {
+        if (typeof map.setFog === 'function') {
+          map.setFog({
+            color: "rgba(2,4,8,1)",
+            "high-color": "rgba(0,0,0,1)",
+            "horizon-blend": 0.18,
+            "space-color": "rgba(0,0,0,1)",
+            "star-intensity": 0.10
+          });
+        }
+      } catch(e) {}
+
+      const style = map.getStyle();
+      const layers = ((style && style.layers) ? style.layers : []);
+
+      const safePaint = (id, prop, val) => { try { map.setPaintProperty(id, prop, val); } catch(e) {} };
+      const safeLayout = (id, prop, val) => { try { map.setLayoutProperty(id, prop, val); } catch(e) {} };
+
+      for (const layer of layers) {
+        if (!layer || !layer.id || !layer.type) continue;
+        const lid = String(layer.id).toLowerCase();
+
+        if (layer.type === 'fill' && (lid.includes('water') || lid.includes('ocean') || lid.includes('lake') || lid.includes('river'))) {
+          safePaint(layer.id, 'fill-color', "rgba(2,6,14,0.95)");
+          safePaint(layer.id, 'fill-opacity', 0.96);
+        }
+
+        if (layer.type === 'line' && (lid.includes('road') || lid.includes('street') || lid.includes('highway') || lid.includes('transport') || lid.includes('motorway') || lid.includes('path'))) {
+          const major =
+            lid.includes('motorway') || lid.includes('trunk') || lid.includes('primary') || lid.includes('highway');
+
+          safePaint(layer.id, 'line-color', major ? "rgba(0,243,255,0.80)" : "rgba(0,243,255,0.30)");
+          safePaint(layer.id, 'line-opacity', major ? 0.90 : 0.65);
+
+          safePaint(layer.id, 'line-width', ['interpolate', ['linear'], ['zoom'],
+            10, major ? 1.0 : 0.65,
+            14, major ? 2.0 : 1.2,
+            16, major ? 3.2 : 1.8,
+            18, major ? 4.2 : 2.4,
+            20, major ? 5.0 : 3.0,
+            22, major ? 6.0 : 3.6
+          ]);
+
+          safePaint(layer.id, 'line-blur', major ? 0.45 : 0.22);
+        }
+
+        if (layer.type === 'fill' && lid.includes('building')) {
+          safePaint(layer.id, 'fill-color', "rgba(0,243,255,0.16)");
+          safePaint(layer.id, 'fill-opacity', 0.72);
+          safePaint(layer.id, 'fill-outline-color', "rgba(0,243,255,0.30)");
+        }
+
+        if (layer.type === 'symbol') {
+          const isRoadLabel =
+            lid.includes('road') ||
+            lid.includes('street') ||
+            lid.includes('highway') ||
+            lid.includes('transport') ||
+            lid.includes('motorway') ||
+            (lid.includes('label') && (lid.includes('road') || lid.includes('street') || lid.includes('transport')));
+
+          if (isRoadLabel) {
+            safeLayout(layer.id, 'symbol-placement', 'line');
+            safeLayout(layer.id, 'text-allow-overlap', true);
+            safeLayout(layer.id, 'text-ignore-placement', true);
+            safeLayout(layer.id, 'symbol-avoid-edges', false);
+
+            safeLayout(layer.id, 'text-size', ['interpolate', ['linear'], ['zoom'],
+              12, 8.4,
+              14, 9.8,
+              16, 12.6,
+              18, 15.4,
+              20, 18.2,
+              22, 21
+            ]);
+
+            safePaint(layer.id, 'text-color',
+              getComputedStyle(document.documentElement).getPropertyValue('--hud-label-warm').trim() ||
+              "rgba(255,185,80,0.98)"
+            );
+            safePaint(layer.id, 'text-halo-color', "rgba(0,0,0,0.88)");
+            safePaint(layer.id, 'text-halo-width', 3.2);
+            safePaint(layer.id, 'text-halo-blur', 0.75);
+          }
+
+          const isPlaceLabel =
+            lid.includes('place') || lid.includes('settlement') || lid.includes('city') || lid.includes('town') || lid.includes('village');
+
+          if (isPlaceLabel && !isRoadLabel) {
+            safePaint(layer.id, 'text-color', "rgba(210,245,255,0.88)");
+            safePaint(layer.id, 'text-halo-color', "rgba(0,0,0,0.78)");
+            safePaint(layer.id, 'text-halo-width', 2.0);
+            safePaint(layer.id, 'text-halo-blur', 0.65);
+          }
+        }
+      }
+
+      // 3D extrusions (best-effort)
+      if (!map.getLayer('sentihnel-3d-buildings')) {
+        const buildingFill = layers.find(l => {
+          if (!l) return false;
+          const id = String(l.id || '').toLowerCase();
+          return (l.type === 'fill' || l.type === 'fill-extrusion') && id.includes('building');
+        });
+
+        if (buildingFill && buildingFill.source && buildingFill['source-layer']) {
+          const before = layers.find(l => l && l.type === 'symbol')?.id;
+
+          try {
+            map.addLayer({
+              id: 'sentihnel-3d-buildings',
+              type: 'fill-extrusion',
+              source: buildingFill.source,
+              'source-layer': buildingFill['source-layer'],
+              minzoom: 13,
+              paint: {
+                'fill-extrusion-color': "rgba(0,243,255,0.18)",
+                'fill-extrusion-opacity': 0.92,
+                'fill-extrusion-height': [
+                  'interpolate', ['linear'], ['zoom'],
+                  13, 0,
+                  15, ['coalesce', ['get', 'render_height'], ['get', 'height'], 18],
+                  18, ['coalesce', ['get', 'render_height'], ['get', 'height'], 40]
+                ],
+                'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0]
+              }
+            }, before);
+
+            try { map.setPitch(64); map.setBearing(-18); } catch(e) {}
+          } catch (e) {}
+        }
+      }
+    }
+
+    initMap();
+
+    // ----------------------------
+    // REALTIME TRACKING
+    // ----------------------------
+    if (DEVICE_ID) {
+      try {
+        const trackingChannel = db.channel(`tracking:${DEVICE_ID}`);
+
+        trackingChannel
+          .on('postgres_changes',
+            { event: '*', schema: 'public', table: 'tracking_sessions', filter: `device_id=eq.${DEVICE_ID}` },
+            (payload) => {
+              const row = payload && (payload.new || payload.old);
+              if (row) updatePosition(row);
             }
+          )
+          .subscribe();
+
+        fetchLastPosition();
+      } catch (e) {}
+    } else {
+      setTopStatus('NO DEVICE ID');
+      showOverlay(true, "ERROR: NO DEVICE ID");
+    }
+
+    async function fetchLastPosition() {
+      try {
+        const { data, error } = await db
+          .from('tracking_sessions')
+          .select('*')
+          .eq('device_id', DEVICE_ID)
+          .maybeSingle();
+
+        if (!error && data) updatePosition(data);
+      } catch (e) {}
+    }
+
+    function normalizeStatus(s) {
+      const x = String(s || '').toUpperCase();
+      if (x === 'SOS') return 'SOS';
+      if (x === 'ACTIVE') return 'ACTIVE';
+      if (!x) return 'SOS';
+      return x;
+    }
+
+    function parseUpdatedAt(row) {
+      const raw =
+        row?.last_updated ||
+        row?.updated_at ||
+        row?.last_seen_at ||
+        row?.created_at ||
+        null;
+
+      if (!raw) return null;
+
+      const t = Date.parse(raw);
+      return Number.isFinite(t) ? t : null;
+    }
+
+    function updatePosition(data) {
+      const { latitude, longitude, status } = data || {};
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const mode = normalizeStatus(status);
+      const updatedAt = parseUpdatedAt(data);
+      const age = updatedAt ? formatAge(Date.now() - updatedAt) : 'UNKNOWN';
+      const subline = `${mode} • ${age}`;
+
+      ensureMarker(lat, lng, mode, subline);
+
+      // ✅ slightly less aggressive zoom than before
+      if (map) {
+        const desiredZoom = 16.16;
+        const currentZoom = Number(map.getZoom());
+        const zoom = Number.isFinite(currentZoom) ? Math.max(currentZoom, desiredZoom) : desiredZoom;
+
+        map.easeTo({
+          center: [lng, lat],
+          zoom,
+          pitch: 66,
+          bearing: -20,
+          duration: 700,
+          essential: true
+        });
+      }
+
+      if (mode === 'SOS') {
+        setTopStatus(`SOS ACTIVE • ${age}`);
+        setBottomStrip('LIVE VIEW • SOS TRACKING');
+      } else {
+        setTopStatus(`SIGNAL CONNECTED • ${age}`);
+        setBottomStrip('LIVE VIEW • TRACKING ACTIVE');
+      }
+
+      fetchLocationName(lat, lng);
+    }
+
+    // ----------------------------
+    // POLICE SCANNER (manual)
+    // ----------------------------
+    async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function metersToMiles(m) { return m / 1609.344; }
+
+    function elementPoint(el) {
+      if (!el) return null;
+      if (el.type === 'node' && Number.isFinite(el.lat) && Number.isFinite(el.lon)) return { lat: el.lat, lng: el.lon };
+      if (el.center && Number.isFinite(el.center.lat) && Number.isFinite(el.center.lon)) return { lat: el.center.lat, lng: el.center.lon };
+      return null;
+    }
+
+    function osmKeyFromElement(el) {
+      const t = String(el.type || '').toLowerCase();
+      const id = el.id;
+      if (!id) return null;
+      if (t === 'node') return `N${id}`;
+      if (t === 'way') return `W${id}`;
+      if (t === 'relation') return `R${id}`;
+      return null;
+    }
+
+    function normalizePhone(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      return s.replace(/[^\d+]/g, '');
+    }
+
+    function googleMapsLink(lat, lng) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
+    }
+
+    function googleSearchLink(query) {
+      return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    }
+
+    async function scanForPolice(lat, lng) {
+      const listDiv = document.getElementById('list-content');
+      if (!listDiv) return;
+
+      if (policeScanInFlight) return;
+      policeScanInFlight = true;
+
+      listDiv.innerHTML = `
+        <div style="padding:10px;text-align:center;color:var(--accent); font-family:'Share Tech Mono', monospace;">
+          Scanning nearest stations...
+        </div>
+      `;
+
+      const query = `[out:json][timeout:15];
+        (
+          node["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
+          way["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
+          relation["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
+        );
+        out center tags;`;
+
+      let overpassData = null;
+
+      for (const ep of OVERPASS_ENDPOINTS) {
+        const url = `${ep}?data=${encodeURIComponent(query)}`;
+        try {
+          overpassData = await fetchJsonWithTimeout(url, {}, 15000);
+          if (overpassData && Array.isArray(overpassData.elements)) break;
+        } catch (e) {
+          overpassData = null;
+        }
+      }
+
+      if (!overpassData || !Array.isArray(overpassData.elements)) {
+        listDiv.innerHTML = `
+          <div style="padding:10px;text-align:center;font-size:12px;color:var(--text-muted); font-family:'Share Tech Mono', monospace;">
+            Police scan temporarily unavailable (Overpass busy). Tap SCAN to retry.
+          </div>
+        `;
+        policeScanInFlight = false;
+        return;
+      }
+
+      await new Promise(r => requestAnimationFrame(r));
+
+      const candidates = overpassData.elements
+        .map(el => {
+          const p = elementPoint(el);
+          const k = osmKeyFromElement(el);
+          if (!p || !k) return null;
+
+          const d = haversineMeters(lat, lng, p.lat, p.lng);
+          const name = (el.tags && el.tags.name) ? el.tags.name : "Police Station";
+          const phoneTag = (el.tags && (el.tags.phone || el.tags["contact:phone"])) ? (el.tags.phone || el.tags["contact:phone"]) : "";
+
+          return {
+            key: k,
+            name,
+            lat: p.lat,
+            lng: p.lng,
+            distance_m: d,
+            phone: normalizePhone(phoneTag),
+            tags: el.tags || {}
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.distance_m - b.distance_m);
+
+      const top = candidates.slice(0, POLICE_MAX_RESULTS);
+
+      if (top.length === 0) {
+        listDiv.innerHTML = `
+          <div style="padding:10px;text-align:center;font-size:12px;color:var(--text-muted); font-family:'Share Tech Mono', monospace;">
+            No police stations found within ${(POLICE_SCAN_RADIUS_M/1000).toFixed(0)} km.
+          </div>
+        `;
+        policeScanInFlight = false;
+        return;
+      }
+
+      listDiv.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      for (const s of top) {
+        const displayName = s.name;
+        const miles = metersToMiles(s.distance_m);
+        const distLabel = miles < 1 ? `${(miles * 5280).toFixed(0)} FT` : `${miles.toFixed(1)} MI`;
+
+        const mapsUrl = googleMapsLink(s.lat, s.lng);
+        const phoneOk = !!s.phone && s.phone.length >= 7;
+        const telHref = phoneOk ? `tel:${s.phone}` : '';
+
+        const lookupQuery = `${displayName} police ${s.lat},${s.lng} phone`;
+        const lookupUrl = googleSearchLink(lookupQuery);
+
+        const card = document.createElement('div');
+        card.className = 'station-card';
+
+        const row = document.createElement('div');
+        row.className = 'station-row';
+
+        const nameEl = document.createElement('span');
+        nameEl.style.fontWeight = '800';
+        nameEl.style.fontSize = '12px';
+        nameEl.style.color = '#fff';
+        nameEl.style.fontFamily = 'Rajdhani, sans-serif';
+        nameEl.style.letterSpacing = '1px';
+        nameEl.textContent = displayName;
+
+        const meta = document.createElement('span');
+        meta.className = 'station-meta';
+        meta.textContent = `NEAREST • ${distLabel}`;
+
+        row.appendChild(nameEl);
+        row.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'station-actions';
+
+        if (phoneOk) {
+          const call = document.createElement('a');
+          call.className = 'call-btn';
+          call.href = telHref;
+          call.textContent = '📞 CALL';
+          actions.appendChild(call);
+        } else {
+          const lookupA = document.createElement('a');
+          lookupA.className = 'call-btn alt';
+          lookupA.href = lookupUrl;
+          lookupA.target = '_blank';
+          lookupA.rel = 'noopener';
+          lookupA.textContent = '🔎 LOOKUP PHONE';
+          actions.appendChild(lookupA);
         }
 
-        let map;
-        if (LAT && LNG) {
-            // Update raw GPS text first
-            document.getElementById('gps-display').innerText = `${LAT.toFixed(4)}, ${LNG.toFixed(4)}`;
-            
-            // MAP SETUP
-            map = L.map('map', { zoomControl: false }).setView([LAT, LNG], 18);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap contributors', maxZoom: 20
-            }).addTo(map);
+        const mapsA = document.createElement('a');
+        mapsA.className = 'call-btn';
+        mapsA.href = mapsUrl;
+        mapsA.target = '_blank';
+        mapsA.rel = 'noopener';
+        mapsA.textContent = '🗺️ OPEN MAPS';
+        actions.appendChild(mapsA);
 
-            const customIcon = L.divIcon({
-                className: 'user-marker',
-                html: `<div class="pulse-ring"></div><div class="user-icon-img"></div>`,
-                iconSize: [60, 60], iconAnchor: [30, 30]
-            });
+        const line = document.createElement('div');
+        line.className = 'station-meta';
+        line.textContent = phoneOk ? `DIRECT LINE: ${s.phone}` : 'DIRECT LINE: NOT LISTED';
 
-            const marker = L.marker([LAT, LNG], {icon: customIcon}).addTo(map);
-            marker.bindTooltip(DEVICE_NAME, {permanent: true, direction: "bottom", className: "name-label"}).openTooltip();
-            
-            marker.on('click', function() { setFocus('map'); });
-            map.on('click', function() { setFocus('map'); });
+        card.appendChild(row);
+        card.appendChild(actions);
+        card.appendChild(line);
 
-            // 🌍 NEW: REVERSE GEOCODING (Get City/State)
-            fetchLocationName(LAT, LNG);
+        frag.appendChild(card);
+      }
+
+      listDiv.appendChild(frag);
+      policeScanInFlight = false;
+    }
+
+    function retryScan() {
+      const listDiv = document.getElementById('list-content');
+      if (listDiv) listDiv.innerHTML = `
+        <div style="padding:10px;text-align:center;color:var(--accent); font-family:'Share Tech Mono', monospace;">
+          Scanning nearest stations...
+        </div>
+      `;
+
+      setTimeout(() => {
+        if (map) {
+          const c = map.getCenter();
+          scanForPolice(c.lat, c.lng);
+        } else if (HAS_URL_COORDS) {
+          scanForPolice(URL_LAT, URL_LNG);
+        }
+      }, 120);
+    }
+
+    // ----------------------------
+    // VIDEO UI HELPERS
+    // ----------------------------
+    function showOverlay(show, text) {
+      const overlay = document.getElementById('video-overlay');
+      const vt = document.getElementById('video-text');
+      if (overlay) overlay.style.display = show ? 'flex' : 'none';
+      if (vt && text) vt.innerText = text;
+    }
+
+    function clearPlayer() {
+      const el = document.getElementById('remote-player');
+      if (el) el.innerHTML = '';
+    }
+
+    function setActiveCamera(which) {
+      activeCam = (which === 'front') ? 'back' : 'front';
+
+      const b = document.getElementById('tab-back');
+      const f = document.getElementById('tab-front');
+      if (b) b.classList.toggle('active', activeCam === 'back');
+      if (f) f.classList.toggle('active', activeCam === 'front');
+
+      const label = document.getElementById('video-label');
+      if (label) label.textContent = (activeCam === 'back') ? 'BACK CAM' : 'FRONT CAM';
+
+      playActiveCamera();
+    }
+
+    function uidTag(uid) {
+      return 'front'; // Always treat as front camera
+    }
+
+    function pickSlotForUid(uid) {
+      cameraUid = uid;
+      return 'front'; // Always assign to front slot
+    }
+
+    function playActiveCamera() {
+      const track = camTracks.front; // Always use front track
+
+      clearPlayer();
+
+      if (!track) {
+        showOverlay(true, 'WAITING FOR FRONT CAM...');
+        return;
+      }
+
+      try {
+        showOverlay(false);
+        track.play("remote-player", { fit: "cover" });
+
+        // iOS/safari friendliness
+        setTimeout(() => {
+          try {
+            const v = document.querySelector('#remote-player video');
+            if (v) {
+              v.setAttribute('playsinline', 'true');
+              v.playsInline = true;
+            }
+          } catch {}
+        }, 50);
+
+        setTopStatus('SIGNAL CONNECTED');
+      } catch (e) {
+        showOverlay(true, "VIDEO START FAILED — RETRYING...");
+        setTimeout(() => { tryReplayActive(); }, 450);
+      }
+    }
+
+    function tryReplayActive() {
+      try {
+        const track = camTracks.front; // Always use front track
+        if (!track) return;
+        clearPlayer();
+        track.play("remote-player", { fit: "cover" });
+        showOverlay(false);
+      } catch {}
+    }
+
+    // ----------------------------
+    // VIDEO ENGINE (Agora) - audience, 2 possible publishers (back/front)
+    // ----------------------------
+    async function createAndJoinAgora() {
+      if (!DEVICE_ID) return;
+
+      agoraClient = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
+      agoraClient.setClientRole("audience");
+
+      agoraClient.on("connection-state-change", (curState, prevState, reason) => {
+        // States: DISCONNECTED / CONNECTING / CONNECTED / RECONNECTING / etc
+        if (curState === "RECONNECTING") {
+          showOverlay(true, "RECONNECTING...");
+          setTopStatus("RECONNECTING...");
+        }
+        if (curState === "DISCONNECTED") {
+          showOverlay(true, "SIGNAL LOST — RECONNECTING...");
+          setTopStatus("SIGNAL LOST");
+          scheduleRejoin();
+        }
+        if (curState === "CONNECTED") {
+          rejoinAttempt = 0;
+          setTopStatus("SIGNAL CONNECTED");
+          playActiveCamera();
+        }
+      });
+
+      agoraClient.on("user-published", async (user, mediaType) => {
+        try {
+          await agoraClient.subscribe(user, mediaType);
+
+          if (mediaType === "video") {
+            const slot = pickSlotForUid(user.uid);
+            if (!slot) return;
+
+            // If host enabled dual-stream, request LOW stream for stability unless user later wants HD
+            if (PREFER_LOW_STREAM && typeof agoraClient.setRemoteVideoStreamType === "function") {
+              try { await agoraClient.setRemoteVideoStreamType(user.uid, 1); } catch {}
+            }
+
+            camTracks[slot] = user.videoTrack;
+
+            // If active cam has arrived, play it. If active isn't available but this is, auto-play.
+            if (slot === activeCam || !camTracks[activeCam]) {
+              playActiveCamera();
+            }
+
+            setTopStatus('SIGNAL CONNECTED');
+          }
+
+          if (mediaType === "audio") {
+            if (!remoteAudioTrack) {
+              remoteAudioTrack = user.audioTrack;
+              try { user.audioTrack.play(); } catch {}
+            }
+          }
+        } catch (e) {}
+      });
+
+      agoraClient.on("user-unpublished", (user, mediaType) => {
+        if (mediaType === 'video') {
+          // Since only one camera, always treat as front
+          camTracks.front = null;
+          if (!camTracks.front) {
+            showOverlay(true, 'WAITING FOR FRONT CAM...');
+          }
         }
 
-        async function fetchLocationName(lat, lng) {
+        if (mediaType === 'audio') {
+          remoteAudioTrack = null;
+        }
+
+        if (!camTracks.front) { // Check only for front
+          setTopStatus('WAITING FOR SIGNAL...');
+        }
+      });
+
+      await agoraClient.join(APP_ID, DEVICE_ID, null, null);
+
+      // Join success — start watchdog
+      startFreezeWatchdog();
+    }
+
+    async function startVideo() {
+      try {
+        await createAndJoinAgora();
+      } catch (e) {
+        showOverlay(true, "UNABLE TO CONNECT — RETRYING...");
+        scheduleRejoin();
+      }
+    }
+
+    async function safeLeaveAgora() {
+      try { if (agoraClient) await agoraClient.leave(); } catch {}
+      try { if (agoraClient) agoraClient.removeAllListeners(); } catch {}
+      try { if (agoraClient) agoraClient = null; } catch {}
+    }
+
+    function scheduleRejoin() {
+      if (rejoinInFlight) return;
+
+      rejoinAttempt = Math.min(rejoinAttempt + 1, 6);
+      const delay = Math.min(1500 * rejoinAttempt, 9000);
+
+      rejoinInFlight = true;
+      setTimeout(async () => {
+        try {
+          await safeLeaveAgora();
+
+          // reset local track refs (they'll republish)
+          camTracks.front = null; // Only front track to clear
+          remoteAudioTrack = null;
+
+          showOverlay(true, "RECONNECTING...");
+          await startVideo();
+        } finally {
+          rejoinInFlight = false;
+        }
+      }, delay);
+    }
+
+    function startFreezeWatchdog() {
+      if (freezeTimer) return;
+
+      freezeStallCount = 0;
+      freezeLastTime = -1;
+
+      freezeTimer = setInterval(() => {
+        try {
+          const v = document.querySelector('#remote-player video');
+          if (!v) return;
+
+          // If video not ready, don't count stalls
+          if (v.readyState < 2) return;
+
+          const t = v.currentTime;
+          if (t === freezeLastTime) {
+            freezeStallCount += 1;
+          } else {
+            freezeStallCount = 0;
+          }
+          freezeLastTime = t;
+
+          // ~4 seconds stalled -> replay
+          if (freezeStallCount >= 4) {
+            freezeStallCount = 0;
+            tryReplayActive();
+
+            // If it keeps happening, rejoin (stronger heal)
+            // (If replay didn't restore motion, next ticks will re-trigger)
+            setTimeout(() => {
+              const v2 = document.querySelector('#remote-player video');
+              if (!v2) return;
+              const t2 = v2.currentTime;
+              if (t2 === freezeLastTime) scheduleRejoin();
+            }, 1200);
+          }
+        } catch {}
+      }, 1000);
+    }
+
+    startVideo();
+
+    // No camera selection needed, always front
+
+    function toggleSheet() {
+      document.getElementById('sidebar').classList.toggle('open');
+      setTimeout(() => { try { map && map.resize(); } catch(e) {} }, 250);
+    }
+
+    async function fetchLocationName(lat, lng) {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+        const d = await res.json();
+
+        const city =
+          (d && d.address && (d.address.city || d.address.town || d.address.village)) ?
+            (d.address.city || d.address.town || d.address.village) : "UNKNOWN CITY";
+
+        const state = (d && d.address && d.address.state) ? d.address.state : "";
+        const country = (d && d.address && d.address.country) ? d.address.country : "";
+
+        const line = [city, state, country].filter(Boolean).join(', ');
+        setBottomStrip(`${String(line || 'UNKNOWN SECTOR').toUpperCase()} • LIVE VIEW`);
+      } catch(e) {}
+    }
+
+    // ----------------------------
+    // EVIDENCE RECORDING (fix: playable downloads)
+    // ----------------------------
+    function getRemoteVideoElementAny() {
+      try {
+        return document.querySelector('#remote-player video') || null;
+      } catch(e) { return null; }
+    }
+
+    function getAnyAudioElement() {
+      try {
+        const a = document.querySelector('audio');
+        return a || null;
+      } catch(e) { return null; }
+    }
+
+    async function getBestEvidenceStream() {
+      const v = getRemoteVideoElementAny();
+      if (v && typeof v.captureStream === 'function') {
+        try {
+          const vs = v.captureStream();
+          const tracks = [];
+          for (const t of (vs.getVideoTracks ? vs.getVideoTracks() : [])) tracks.push(t);
+
+          const a = getAnyAudioElement();
+          if (a && typeof a.captureStream === 'function') {
             try {
-                // Uses OpenStreetMap's free lookup service
-                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-                const data = await response.json();
-                
-                const addr = data.address;
-                // Try to find the best "City" name (Cities have many names like town, village, hamlet)
-                const city = addr.city || addr.town || addr.village || addr.county || "Unknown Area";
-                const state = addr.state || "";
-                
-                // Update the UI Card
-                document.getElementById('city-text').innerText = city;
-                document.getElementById('state-text').innerText = state;
-                
-                // Update the Button Text too
-                document.getElementById('gps-display').innerText = `Near ${city}, ${state}`;
-            } catch (e) {
-                console.log("Could not fetch address", e);
-                document.getElementById('city-text').innerText = "Unknown";
-            }
-        }
+              const as = a.captureStream();
+              for (const t of (as.getAudioTracks ? as.getAudioTracks() : [])) tracks.push(t);
+            } catch(e) {}
+          }
 
-        async function startVideo() {
-            if (!CHANNEL_ID) return;
-            const client = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
-            client.setClientRole("audience");
-            await client.join(APP_ID, CHANNEL_ID, null, null);
-            client.on("user-published", async (user, mediaType) => {
-                await client.subscribe(user, mediaType);
-                if (mediaType === "video") user.videoTrack.play("remote-player");
-            });
-        }
-        startVideo();
+          if (tracks.length > 0) return new MediaStream(tracks);
+        } catch(e) {}
+      }
 
-        function findPolice() {
-            window.open(`https://www.google.com/maps/search/?api=1&query=${LAT},${LNG}`, '_blank');
+      // Fallback: screen capture (user chooses tab)
+      return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    }
+
+    function pickRecorderMimeType() {
+      // ✅ Prefer VP8/Opus WebM (plays on most machines). Avoid advertising mp4 if not truly mp4.
+      const prefs = [
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp9,opus',
+        'video/webm'
+      ];
+      for (const t of prefs) {
+        try {
+          if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+            return t;
+          }
+        } catch(e) {}
+      }
+      return '';
+    }
+
+    function renderDownloadAndPreview(blob, filename) {
+      const area = document.getElementById('download-area');
+      if (!area) return;
+
+      area.innerHTML = '';
+      const url = URL.createObjectURL(blob);
+
+      // Preview (so you can verify it plays immediately)
+      const vid = document.createElement('video');
+      vid.controls = true;
+      vid.src = url;
+      vid.style.width = '100%';
+      vid.style.marginTop = '10px';
+      vid.style.border = '1px solid rgba(0,243,255,0.35)';
+      vid.style.background = '#000';
+      area.appendChild(vid);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.className = 'cam-tab';
+      a.style.marginTop = '10px';
+      a.textContent = '⬇️ DOWNLOAD EVIDENCE';
+      area.appendChild(a);
+
+      // Cleanup later
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch(e) {} }, 120_000);
+    }
+
+    async function toggleRecording() {
+      const btn = document.getElementById('rec-btn');
+      if (!btn) return;
+
+      const downloadArea = document.getElementById('download-area');
+      if (downloadArea) downloadArea.innerHTML = '';
+
+      if (!isRecording) {
+        try {
+          const stream = await getBestEvidenceStream();
+          recordedChunks = [];
+
+          const mt = pickRecorderMimeType();
+          const opts = mt ? { mimeType: mt } : undefined;
+
+          mediaRecorder = new MediaRecorder(stream, opts);
+
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+          };
+
+          mediaRecorder.onstop = () => {
+            try { stream.getTracks().forEach(t => { try { t.stop(); } catch(e) {} }); } catch(e) {}
+
+            const mime = (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : (mt || 'video/webm');
+            const blob = new Blob(recordedChunks, { type: mime });
+
+            const ext = String(mime).includes('mp4') ? 'mp4' : 'webm';
+            const filename = `SENTIHNEL_EVIDENCE_${DEVICE_ID || 'UNKNOWN'}_${Date.now()}.${ext}`;
+            renderDownloadAndPreview(blob, filename);
+          };
+
+          // timeslice improves finalization reliability
+          mediaRecorder.start(1000);
+
+          isRecording = true;
+          recStartTime = Date.now();
+          recInterval = setInterval(() => {
+            const d = new Date(Date.now() - recStartTime);
+            const hh = pad2(d.getUTCHours());
+            const mm = pad2(d.getUTCMinutes());
+            const ss = pad2(d.getUTCSeconds());
+            const el = document.getElementById('rec-timer');
+            if (el) el.innerText = `${hh}:${mm}:${ss}`;
+          }, 1000);
+
+          btn.classList.add('recording');
+          btn.innerText = "⏹️ STOP RECORDING";
+        } catch(e) {
+          setTopStatus("RECORDING BLOCKED");
+          setTimeout(() => { setTopStatus("SIGNAL CONNECTED"); }, 1600);
         }
-    </script>
+      } else {
+        try { mediaRecorder.stop(); } catch(e) {}
+        isRecording = false;
+        if (recInterval) clearInterval(recInterval);
+        recInterval = null;
+
+        btn.classList.remove('recording');
+        btn.innerText = "⏺️ RECORD LIVE FEED";
+      }
+    }
+  </script>
 </body>
 </html>

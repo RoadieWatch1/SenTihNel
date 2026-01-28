@@ -1,18 +1,30 @@
 // 📂 FILE LOCATION: SenTihNel/src/services/LiveTracker.js
-// ✅ Updated for: Added clearSOS and forceOneShotSync
-// ✅ IMPORTANT: This file uses your shared Supabase client from src/lib/supabase
+// ✅ Phase 1: DO NOT delete sentinel_device_id (device ID must be stable)
+// ✅ Phase 1: Always read latest group_id from AsyncStorage (avoid stale cache)
+// ✅ Option B (movable): ALWAYS bind/move this device_id to the logged-in user via SECURITY DEFINER RPC
+//    → uses register_or_move_device through handshakeDevice() with caching/throttling
+//
+// ✅ Phase 5 update (THIS CHANGE):
+// - If SOS triggers before we get a “good” GPS lock, we immediately use LAST-KNOWN GPS (best-effort),
+//   upload it to tracking_sessions, and keep updating as better GPS arrives.
+// - forceOneShotSync() now supports fallback to getLastKnownPositionAsync() and can accept injected coords.
 
 import * as Location from "expo-location";
 import * as Battery from "expo-battery";
 import * as TaskManager from "expo-task-manager";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { supabase } from "../lib/supabase"; // ✅ uses the same client/session as your Auth screen
+import { supabase } from "../lib/supabase";
+import { getDeviceId as getStableDeviceId } from "./Identity";
+import { handshakeDevice } from "./deviceHandshake";
 
 const BACKGROUND_TASK_NAME = "BACKGROUND_LOCATION_TASK";
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
-const STORAGE_KEY_SOS = "sentinel_sos_active"; // ✅ Added SOS Key
+const STORAGE_KEY_SOS = "sentinel_sos_active";
+
+// ✅ server-side "claim" RPC (deletes stale tracking_sessions row for this device)
+const RPC_CLAIM_TRACKING_DEVICE = "claim_tracking_session_device";
 
 // ✅ Your DB now has these columns (after running your SQL):
 const SCHEMA_FLAGS = {
@@ -29,10 +41,8 @@ const SCHEMA_FLAGS = {
 const TRACKING_PROFILES = {
   SOS: {
     accuracy: Location.Accuracy.Highest,
-    distanceInterval: 5, // Update every 5 meters
-    timeInterval: 5000, // or every 5 seconds
-
-    // Background persistence
+    distanceInterval: 5,
+    timeInterval: 5000,
     deferredUpdatesInterval: 5000,
     deferredUpdatesDistance: 5,
   },
@@ -40,20 +50,69 @@ const TRACKING_PROFILES = {
 
 // State Tracking (Memory)
 let memoryDeviceId = null;
-let memoryGroupId = null;
 let isSending = false;
 let pendingLocation = null;
+
+// ✅ “Good” GPS (accurate) cache
 let lastGoodCoords = null;
+
+// ✅ Phase 5: “Last known” GPS cache (can be poor, but used immediately for SOS)
+let lastKnownCoords = null;
+let lastKnownAccuracyM = null;
+let lastLastKnownFetchAt = 0;
+const LAST_KNOWN_FETCH_COOLDOWN_MS = 15_000;
+
+// ✅ Phase 3 fix: track last-seen group id in memory so we can rebind instantly on switch
+let memoryGroupId = null;
 
 // Small safety: avoid hammering Supabase if user is logged out / not ready
 let lastAuthWarningAt = 0;
 const AUTH_WARN_COOLDOWN_MS = 8000;
 
-/**
- * Safe helpers
- */
+// ✅ Membership cache (reduces repeated queries)
+let membershipCache = {
+  userId: null,
+  groupId: null,
+  ok: false,
+  checkedAt: 0,
+};
+const MEMBERSHIP_CACHE_MS_OK = 30_000;
+const MEMBERSHIP_CACHE_MS_FAIL = 8_000;
+
+// ✅ Device bind/move cache (prevents repeated register_or_move_device spam)
+let bindCache = {
+  userId: null,
+  deviceId: null,
+  groupId: null,
+  ok: false,
+  checkedAt: 0,
+};
+const BIND_CACHE_MS_OK = 60_000;
+const BIND_CACHE_MS_FAIL = 10_000;
+
+// ✅ Claim cache (prevents repeated claim spam)
+let claimCache = {
+  deviceId: null,
+  groupId: null,
+  ok: false,
+  checkedAt: 0,
+};
+const CLAIM_CACHE_MS_OK = 60_000;
+const CLAIM_CACHE_MS_FAIL = 10_000;
+
 const safeIsoNow = () => new Date().toISOString();
 const safeCoord = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+const isRlsError = (err) => {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("row-level security") ||
+    msg.includes("violates row level security") ||
+    msg.includes("violates row-level security") ||
+    msg.includes("new row violates row-level security") ||
+    msg.includes("permission denied")
+  );
+};
 
 const setIfAllowed = (payload, key, value) => {
   const flagName = `has_${key}`;
@@ -70,45 +129,188 @@ const safeGetBatteryPercent = async () => {
   return null;
 };
 
+/**
+ * ✅ Phase 1: Always resolve device id via Identity (stable)
+ * - Persist to AsyncStorage so all modules share the same value.
+ */
 const safeGetDeviceId = async () => {
   if (memoryDeviceId) return memoryDeviceId;
+
+  try {
+    const id = await getStableDeviceId();
+    if (id) {
+      memoryDeviceId = id;
+      try {
+        await AsyncStorage.setItem(STORAGE_KEY_DEVICE_ID, id);
+      } catch (_) {}
+      return memoryDeviceId;
+    }
+  } catch (_) {}
+
+  // fallback to storage (rare)
   const stored = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_ID);
   memoryDeviceId = stored || null;
   return memoryDeviceId;
 };
 
+/**
+ * ✅ Phase 1: DO NOT cache group_id forever.
+ * Users can create/join a fleet after tracking already started.
+ * So always read latest group id from AsyncStorage.
+ */
 const safeGetGroupId = async () => {
-  if (memoryGroupId) return memoryGroupId;
-  const stored = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
-  memoryGroupId = stored || null;
-  return memoryGroupId;
+  try {
+    const stored = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+    return stored || null;
+  } catch (_) {
+    return null;
+  }
 };
 
-// ✅ SOS Helpers (Exported so UI/BatSignal can toggle)
+// ✅ Phase 3 fix: hard reset local caches when group changes / after switch
+const resetFleetBoundState = (reason = "unknown") => {
+  // Important: do NOT clear sentinel_device_id (Phase 1 rule)
+  pendingLocation = null;
+  isSending = false;
+
+  lastGoodCoords = null;
+  lastKnownCoords = null;
+  lastKnownAccuracyM = null;
+  lastLastKnownFetchAt = 0;
+
+  membershipCache = { userId: null, groupId: null, ok: false, checkedAt: 0 };
+  bindCache = { userId: null, deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+  claimCache = { deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+
+  console.log(`🔁 TRACKER: Fleet context reset (${reason})`);
+};
+
+// ✅ SOS Helpers
 export const setSOSActive = async (active) => {
   try {
     await AsyncStorage.setItem(STORAGE_KEY_SOS, active ? "1" : "0");
   } catch (_) {}
 };
 
-// ✅ NEW: Clear SOS and reset status (Hidden Safe Cancel)
 export const clearSOS = async () => {
   await setSOSActive(false);
 };
 
-// ✅ NEW: Force an immediate sync (used when clearing SOS to update DB instantly)
-export const forceOneShotSync = async () => {
+const normalizeInjectedLocation = (input) => {
+  if (!input) return null;
+
+  // If a full Expo Location object was passed
+  if (input?.coords && typeof input.coords === "object") {
+    const lat = safeCoord(input.coords.latitude);
+    const lng = safeCoord(input.coords.longitude);
+    if (lat != null && lng != null) return input;
+    return null;
+  }
+
+  // If simple coords were passed: { latitude, longitude, accuracy? }
+  const lat = safeCoord(input.latitude);
+  const lng = safeCoord(input.longitude);
+  if (lat == null || lng == null) return null;
+
+  return {
+    coords: {
+      latitude: lat,
+      longitude: lng,
+      accuracy: safeCoord(input.accuracy) ?? null,
+      speed: safeCoord(input.speed) ?? null,
+      heading: safeCoord(input.heading) ?? null,
+      altitude: safeCoord(input.altitude) ?? null,
+    },
+    timestamp: typeof input.timestamp === "number" ? input.timestamp : Date.now(),
+  };
+};
+
+const maybeUpdateLastKnown = (latitude, longitude, accuracyM) => {
+  if (latitude == null || longitude == null) return;
+  lastKnownCoords = { latitude, longitude };
+  if (typeof accuracyM === "number" && Number.isFinite(accuracyM)) {
+    lastKnownAccuracyM = Math.round(accuracyM);
+  }
+};
+
+const fetchLastKnownLocationBestEffort = async ({ force = false } = {}) => {
+  const now = Date.now();
+  if (!force && now - lastLastKnownFetchAt < LAST_KNOWN_FETCH_COOLDOWN_MS) return null;
+  lastLastKnownFetchAt = now;
+
   try {
+    const last = await Location.getLastKnownPositionAsync();
+    const lat = safeCoord(last?.coords?.latitude);
+    const lng = safeCoord(last?.coords?.longitude);
+    if (lat == null || lng == null) return null;
+
+    maybeUpdateLastKnown(lat, lng, last?.coords?.accuracy);
+    return last;
+  } catch (_) {
+    return null;
+  }
+};
+
+/**
+ * ✅ Phase 5 update:
+ * forceOneShotSync now supports:
+ * - injected coords/location (from SOS trigger)
+ * - fallback to getLastKnownPositionAsync if current GPS can’t lock yet
+ */
+export const forceOneShotSync = async (opts = {}) => {
+  try {
+    const injected = normalizeInjectedLocation(opts?.location || opts?.coords || opts);
+    if (injected) {
+      // Immediately process the injected “best effort” location
+      await handleLocationUpdate(injected);
+      return;
+    }
+
     const hasPerm = await Location.getForegroundPermissionsAsync();
     if (hasPerm.status !== "granted") return;
 
-    const loc = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Highest,
-    });
+    try {
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+      await handleLocationUpdate(loc);
+      return;
+    } catch (e) {
+      // Fallback to last-known
+      const last = await fetchLastKnownLocationBestEffort({ force: true });
+      if (last) {
+        await handleLocationUpdate(last);
+        return;
+      }
 
-    await handleLocationUpdate(loc);
+      console.log("🟡 forceOneShotSync failed (no current GPS, no last-known):", e?.message || e);
+    }
   } catch (e) {
     console.log("🟡 forceOneShotSync failed (non-fatal):", e?.message || e);
+  }
+};
+
+// ✅ Phase 3 fix: call this right after join/switch completes (after you set sentinel_group_id)
+// It clears stale caches AND forces an immediate sync attempt on the new group.
+export const rebindTrackerToLatestFleet = async (reason = "manual_rebind") => {
+  try {
+    const nextGroupId = await safeGetGroupId();
+    if (!nextGroupId) {
+      console.log("🟡 TRACKER REBIND: No group_id found yet — skipping.");
+      return;
+    }
+
+    // Update memoryGroupId immediately so processUpload treats this as the active fleet
+    const prev = memoryGroupId;
+    memoryGroupId = nextGroupId;
+
+    // Hard reset caches so membership/bind/claim re-run under the new group
+    resetFleetBoundState(`${reason}${prev && prev !== nextGroupId ? ` (${prev} → ${nextGroupId})` : ""}`);
+
+    // Try an immediate sync (best-effort)
+    await forceOneShotSync();
+  } catch (e) {
+    console.log("🟡 TRACKER REBIND failed (non-fatal):", e?.message || e);
   }
 };
 
@@ -129,6 +331,117 @@ const requireSessionUser = async () => {
     return data?.session?.user ?? null;
   } catch (_) {
     return null;
+  }
+};
+
+// ✅ Check membership (cached)
+const ensureMemberOfGroup = async (userId, groupId) => {
+  if (!userId || !groupId) return false;
+
+  const now = Date.now();
+  const ttl = membershipCache.ok ? MEMBERSHIP_CACHE_MS_OK : MEMBERSHIP_CACHE_MS_FAIL;
+
+  if (
+    membershipCache.userId === userId &&
+    membershipCache.groupId === groupId &&
+    now - membershipCache.checkedAt < ttl
+  ) {
+    return membershipCache.ok;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("group_members")
+      .select("group_id")
+      .eq("user_id", userId)
+      .eq("group_id", groupId)
+      .limit(1);
+
+    const ok = !error && Array.isArray(data) && data.length > 0;
+    membershipCache = { userId, groupId, ok, checkedAt: now };
+
+    if (error) console.log("🟡 MEMBERSHIP CHECK ERROR:", error.message || error);
+    return ok;
+  } catch (e) {
+    membershipCache = { userId, groupId, ok: false, checkedAt: now };
+    return false;
+  }
+};
+
+/**
+ * ✅ Option B core: bind/move device row to current user+group via SECURITY DEFINER RPC
+ * Uses handshakeDevice() which prefers register_or_move_device.
+ */
+const ensureDeviceBoundToUserAndGroup = async (userId, deviceId, groupId, { force = false } = {}) => {
+  if (!userId || !deviceId || !groupId) return false;
+
+  const now = Date.now();
+  const ttl = bindCache.ok ? BIND_CACHE_MS_OK : BIND_CACHE_MS_FAIL;
+
+  if (
+    !force &&
+    bindCache.userId === userId &&
+    bindCache.deviceId === deviceId &&
+    bindCache.groupId === groupId &&
+    now - bindCache.checkedAt < ttl
+  ) {
+    return bindCache.ok;
+  }
+
+  try {
+    const res = await handshakeDevice({ groupId, deviceId });
+    const ok = !!res?.ok;
+
+    bindCache = { userId, deviceId, groupId, ok, checkedAt: now };
+
+    if (!ok) {
+      console.log("🟡 DEVICE HANDSHAKE FAILED:", res?.error || "Unknown error");
+    }
+
+    return ok;
+  } catch (e) {
+    bindCache = { userId, deviceId, groupId, ok: false, checkedAt: now };
+    console.log("🟡 DEVICE HANDSHAKE EXCEPTION:", e?.message || e);
+    return false;
+  }
+};
+
+// ✅ claim stale tracking_sessions row server-side (cached)
+const claimTrackingDeviceIfNeeded = async (deviceId, groupId, { force = false } = {}) => {
+  if (!deviceId || !groupId) return false;
+
+  const now = Date.now();
+  const ttl = claimCache.ok ? CLAIM_CACHE_MS_OK : CLAIM_CACHE_MS_FAIL;
+
+  if (
+    !force &&
+    claimCache.deviceId === deviceId &&
+    claimCache.groupId === groupId &&
+    now - claimCache.checkedAt < ttl
+  ) {
+    return claimCache.ok;
+  }
+
+  try {
+    const { error } = await supabase.rpc(RPC_CLAIM_TRACKING_DEVICE, {
+      p_device_id: deviceId,
+      p_group_id: groupId,
+    });
+
+    const ok = !error;
+    claimCache = { deviceId, groupId, ok, checkedAt: now };
+
+    if (error) {
+      console.log("🟡 CLAIM DEVICE RPC ERROR:", error.message || error);
+    } else {
+      console.log("✅ CLAIMED TRACKING DEVICE (stale row removed):", deviceId);
+    }
+
+    return ok;
+  } catch (e) {
+    claimCache = { deviceId, groupId, ok: false, checkedAt: now };
+    console.log("🟡 CLAIM DEVICE RPC FAILED:", e?.message || e);
+    return false;
   }
 };
 
@@ -199,11 +512,45 @@ const processUpload = async (location, { isPoorGps }) => {
 
   const deviceId = await safeGetDeviceId();
   if (!deviceId) {
-    console.log("🟡 TRACKER: No device_id stored yet — skipping upload.");
+    console.log("🟡 TRACKER: No device_id available — skipping upload.");
     return;
   }
 
   const groupId = await safeGetGroupId();
+  if (!groupId) {
+    console.log("🟡 TRACKER: No fleet group_id yet — skipping upload.");
+    return;
+  }
+
+  // ✅ Phase 3 fix: If fleet changed, hard-reset caches immediately
+  if (memoryGroupId && memoryGroupId !== groupId) {
+    const prev = memoryGroupId;
+    memoryGroupId = groupId;
+    resetFleetBoundState(`group_id_changed (${prev} → ${groupId})`);
+  } else if (!memoryGroupId) {
+    memoryGroupId = groupId;
+  }
+
+  // ✅ Avoid RLS spam if membership isn't ready / not linked
+  const isMember = await ensureMemberOfGroup(user.id, groupId);
+  if (!isMember) {
+    console.log(
+      "🟡 TRACKER: Authenticated but NOT a member of this fleet yet — skipping upload.",
+      `user_id=${user.id} group_id=${groupId}`
+    );
+    return;
+  }
+
+  // ✅ Option B: ensure device is bound/moved to this user+group before we touch tracking_sessions
+  const boundOk = await ensureDeviceBoundToUserAndGroup(user.id, deviceId, groupId);
+  if (!boundOk) {
+    console.log("🟡 TRACKER: Device not bound to user+group yet — skipping upload (prevents RLS spam).");
+    return;
+  }
+
+  // ✅ Best-effort claim on the current group
+  await claimTrackingDeviceIfNeeded(deviceId, groupId);
+
   const batteryPercent = await safeGetBatteryPercent();
   const coords = location?.coords || {};
 
@@ -212,31 +559,35 @@ const processUpload = async (location, { isPoorGps }) => {
   const speed = safeCoord(coords.speed);
   const heading = safeCoord(coords.heading);
   const altitude = safeCoord(coords.altitude);
+  const accuracyM = typeof coords.accuracy === "number" ? coords.accuracy : null;
 
+  // ✅ Phase 5: Always remember last-known when we have ANY coords (even poor)
+  if (latitude != null && longitude != null) {
+    maybeUpdateLastKnown(latitude, longitude, accuracyM);
+  }
+
+  // ✅ “Good” GPS cache only when accuracy is decent
   if (latitude != null && longitude != null && !isPoorGps) {
     lastGoodCoords = { latitude, longitude };
   }
 
   const payload = {
     device_id: deviceId,
+    group_id: groupId, // ✅ ALWAYS include group_id for RLS
     battery_level: batteryPercent ?? -1,
   };
 
-  if (groupId) {
-    payload.group_id = groupId;
-  }
-
-  // ✅ Step 1.1C: Check SOS status dynamically
   const sosOn = await isSOSActive();
   setIfAllowed(payload, "status", sosOn ? "SOS" : "ACTIVE");
-
   setIfAllowed(payload, "last_updated", safeIsoNow());
-  setIfAllowed(
-    payload,
-    "gps_accuracy_m",
-    typeof coords.accuracy === "number" ? Math.round(coords.accuracy) : null
-  );
+  setIfAllowed(payload, "gps_accuracy_m", typeof accuracyM === "number" ? Math.round(accuracyM) : lastKnownAccuracyM);
 
+  // ✅ Decision tree:
+  // 1) If current coords are not poor → use them
+  // 2) Else if we have lastGoodCoords → use them
+  // 3) Else if SOS is on and we have lastKnownCoords → use them immediately (Phase 5 requirement)
+  // 4) Else if SOS is on, try fetching last-known once → use it if found
+  // 5) Else: wait
   if (!isPoorGps && latitude != null && longitude != null) {
     payload.latitude = latitude;
     payload.longitude = longitude;
@@ -249,40 +600,120 @@ const processUpload = async (location, { isPoorGps }) => {
     payload.latitude = lastGoodCoords.latitude;
     payload.longitude = lastGoodCoords.longitude;
     setIfAllowed(payload, "gps_quality", "POOR");
+  } else if (sosOn && lastKnownCoords) {
+    payload.latitude = lastKnownCoords.latitude;
+    payload.longitude = lastKnownCoords.longitude;
+    setIfAllowed(payload, "gps_quality", "POOR");
+  } else if (sosOn) {
+    const last = await fetchLastKnownLocationBestEffort({ force: false });
+    const llat = safeCoord(last?.coords?.latitude);
+    const llng = safeCoord(last?.coords?.longitude);
+
+    if (llat != null && llng != null) {
+      payload.latitude = llat;
+      payload.longitude = llng;
+      setIfAllowed(payload, "gps_quality", "POOR");
+    } else {
+      console.log("⚠️ SOS: No current GPS yet and no last-known available (waiting briefly)");
+      return;
+    }
   } else {
     console.log("⚠️ GPS not ready yet (waiting for first reliable fix)");
     return;
   }
 
-  // ✅ Step 1.1D: Detailed logging to verify SOS and Group ID
   console.log(
     `📡 SYNC [${payload.status || "ACTIVE"}]: ${payload.latitude?.toFixed(4)}, ${payload.longitude?.toFixed(
       4
-    )} | 🔋 ${payload.battery_level}%${payload.group_id ? ` | 👥 ${payload.group_id}` : ""}`
+    )} | 🔋 ${payload.battery_level}% | 👥 ${payload.group_id} | 🎯 ${payload.gps_quality || "?"}`
   );
 
-  const { error } = await supabase.from("tracking_sessions").upsert([payload], {
-    onConflict: "device_id",
-  });
+  const attemptUpsert = async () =>
+    supabase.from("tracking_sessions").upsert([payload], { onConflict: "device_id" });
 
-  if (error) console.error("❌ SUPABASE ERROR:", error.message || error);
-  else console.log("✅ SYNC OK");
+  // ✅ First attempt: normal upsert
+  let { error } = await attemptUpsert();
+
+  // ✅ If RLS blocked due to stale row under different group_id, claim + retry
+  if (error && isRlsError(error)) {
+    console.log("🟡 RLS blocked on upsert — attempting CLAIM + retry (stale row fix)...");
+    const claimed = await claimTrackingDeviceIfNeeded(deviceId, groupId, { force: true });
+
+    if (claimed) {
+      const retry = await attemptUpsert();
+      error = retry?.error || null;
+      if (!error) {
+        console.log("✅ SYNC OK (after claim)");
+        return;
+      }
+    }
+  }
+
+  // ✅ If still blocked, force-refresh device binding once and retry once more
+  if (error && isRlsError(error)) {
+    console.log("🟡 Still blocked — forcing DEVICE HANDSHAKE (move/rebind) + retry once...");
+    const rebound = await ensureDeviceBoundToUserAndGroup(user.id, deviceId, groupId, { force: true });
+
+    if (rebound) {
+      // After a forced rebind, also force claim once to guarantee a clean row
+      await claimTrackingDeviceIfNeeded(deviceId, groupId, { force: true });
+
+      const retry2 = await attemptUpsert();
+      error = retry2?.error || null;
+      if (!error) {
+        console.log("✅ SYNC OK (after handshake refresh)");
+        return;
+      }
+    }
+  }
+
+  if (error) {
+    if (isRlsError(error)) {
+      console.error(
+        `❌ SUPABASE RLS BLOCKED (tracking_sessions).
+Likely causes:
+• tracking_sessions row exists under a DIFFERENT group_id (stale row) → claim RPC should fix
+• devices row not bound/moved to this user+group → register_or_move_device should fix
+• group_members / RLS policy not allowing this user for this group
+
+Debug:
+• device_id: ${deviceId}
+• user_id:   ${user.id}
+• payload group_id: ${groupId}
+
+RPCs installed (you confirmed):
+• public.register_or_move_device(text, uuid, text default null)
+• public.claim_tracking_session_device(text, uuid)
+`
+      );
+      return;
+    }
+
+    console.error("❌ SUPABASE ERROR:", error.message || error);
+    return;
+  }
+
+  console.log("✅ SYNC OK");
 };
 
 /**
  * 4️⃣ START TRACKING
  */
-export const startLiveTracking = async (deviceId, mode = "SOS") => {
-  console.log(`🚀 ACTIVATING STEALTH TRACKER: ${deviceId}`);
+export const startLiveTracking = async (_deviceId, mode = "SOS") => {
+  // ✅ Phase 1: ALWAYS use Identity as the source of truth
+  const stableId = await safeGetDeviceId();
+  if (!stableId) {
+    console.log("❌ TRACKER: Cannot start (no device id).");
+    return;
+  }
+
+  console.log(`🚀 ACTIVATING STEALTH TRACKER: ${stableId}`);
 
   try {
     await activateKeepAwakeAsync();
   } catch (e) {
     console.log("🟡 KeepAwake not available right now (non-fatal).");
   }
-
-  memoryDeviceId = deviceId;
-  await AsyncStorage.setItem(STORAGE_KEY_DEVICE_ID, deviceId);
 
   const fg = await Location.requestForegroundPermissionsAsync();
   await Location.requestBackgroundPermissionsAsync();
@@ -291,6 +722,27 @@ export const startLiveTracking = async (deviceId, mode = "SOS") => {
     console.error("❌ LOCATION PERMISSIONS NOT GRANTED");
     return;
   }
+
+  // ✅ Phase 3 fix: snapshot memoryGroupId at start (still reads from storage every tick)
+  try {
+    const g = await safeGetGroupId();
+    memoryGroupId = g || null;
+  } catch (_) {
+    memoryGroupId = null;
+  }
+
+  // ✅ Best-effort: pre-bind device to current user+group (prevents first-sync RLS failures)
+  try {
+    const user = await requireSessionUser();
+    const groupId = await safeGetGroupId();
+    if (user?.id && groupId) {
+      const isMember = await ensureMemberOfGroup(user.id, groupId);
+      if (isMember) {
+        await ensureDeviceBoundToUserAndGroup(user.id, stableId, groupId);
+        await claimTrackingDeviceIfNeeded(stableId, groupId);
+      }
+    }
+  } catch (_) {}
 
   const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK_NAME);
   if (alreadyRunning) {
@@ -330,26 +782,45 @@ export const stopLiveTracking = async () => {
     console.log("🛑 BACKGROUND TRACKER STOPPED");
   }
 
+  // Mark OFFLINE once (best-effort) if logged in
   if (memoryDeviceId) {
     const user = await requireSessionUser();
     if (user) {
-      const offlinePayload = { device_id: memoryDeviceId };
-      setIfAllowed(offlinePayload, "status", "OFFLINE");
-      setIfAllowed(offlinePayload, "last_updated", safeIsoNow());
+      try {
+        const offlinePayload = { device_id: memoryDeviceId };
+        setIfAllowed(offlinePayload, "status", "OFFLINE");
+        setIfAllowed(offlinePayload, "last_updated", safeIsoNow());
 
-      const groupId = await safeGetGroupId();
-      if (groupId) offlinePayload.group_id = groupId;
+        const groupId = await safeGetGroupId();
+        if (groupId) offlinePayload.group_id = groupId;
 
-      await supabase.from("tracking_sessions").upsert([offlinePayload], {
-        onConflict: "device_id",
-      });
+        const { error } = await supabase.from("tracking_sessions").upsert([offlinePayload], {
+          onConflict: "device_id",
+        });
+
+        if (error) {
+          // best-effort only; avoid noisy spam on shutdown
+          // console.log("🟡 OFFLINE upsert warning:", error.message || error);
+        }
+      } catch (_) {}
     }
   }
 
-  await AsyncStorage.removeItem(STORAGE_KEY_DEVICE_ID);
-  memoryDeviceId = null;
-  memoryGroupId = null;
+  // ✅ Phase 1 CRITICAL: DO NOT remove sentinel_device_id
+  // await AsyncStorage.removeItem(STORAGE_KEY_DEVICE_ID);
+
   pendingLocation = null;
   isSending = false;
+
   lastGoodCoords = null;
+  lastKnownCoords = null;
+  lastKnownAccuracyM = null;
+  lastLastKnownFetchAt = 0;
+
+  membershipCache = { userId: null, groupId: null, ok: false, checkedAt: 0 };
+  bindCache = { userId: null, deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+  claimCache = { deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+
+  // ✅ Phase 3: clear memoryGroupId on stop
+  memoryGroupId = null;
 };

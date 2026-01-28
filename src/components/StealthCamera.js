@@ -1,63 +1,111 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+// C:\Users\vizir\SenTihNel\src\components\StealthCamera.js
+import React, { useState, useEffect, useRef } from "react";
+import { View, StyleSheet } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera";
 
-export default function StealthCamera({ active }) {
+/**
+ * StealthCamera (LOCAL DEVICE RECORDING)
+ *
+ * ⚠️ IMPORTANT:
+ * - expo-camera WILL often conflict with react-native-agora camera capture.
+ * - If this runs during SOS streaming, dashboard video may go black.
+ *
+ * ✅ Default behavior here: DISABLED unless you explicitly pass enabled={true}.
+ * That keeps your Agora dashboard video reliable.
+ */
+export default function StealthCamera({ active, enabled = false }) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
+  const isMountedRef = useRef(true);
 
-  // 1. Request Permissions on Mount
   useEffect(() => {
-    if (!permission) {
-      requestPermission();
-    }
-  }, [permission]);
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // ensure stop on unmount
+      try {
+        if (cameraRef.current && isRecording) {
+          cameraRef.current.stopRecording();
+        }
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // 2. Handle Start/Stop Logic
+  // Request permissions when needed
   useEffect(() => {
+    (async () => {
+      try {
+        if (!enabled) return;
+        if (!permission) return; // hook still loading
+        if (permission.granted) return;
+        await requestPermission();
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, permission?.granted]);
+
+  // Start/Stop recording based on active flag
+  useEffect(() => {
+    if (!enabled) return;
+
+    const granted = !!permission?.granted;
+    if (!granted) return;
+
     if (active && cameraRef.current && !isRecording) {
       startRecording();
     } else if (!active && isRecording) {
       stopRecording();
     }
-  }, [active]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, active, permission?.granted]);
 
   const startRecording = async () => {
     try {
-      if (cameraRef.current) {
-        setIsRecording(true);
-        console.log("🎥 STARTING RECORDING...");
-        const video = await cameraRef.current.recordAsync();
-        console.log("✅ VIDEO SAVED TO:", video.uri);
-      }
-    } catch (e) {
-      console.error("Camera Error:", e);
+      if (!cameraRef.current) return;
+      if (isRecording) return;
+
+      setIsRecording(true);
+      console.log("🎥 STARTING LOCAL RECORDING (backup)...");
+
+      // Best-effort local recording
+      const video = await cameraRef.current.recordAsync();
+
+      if (!isMountedRef.current) return;
+
+      console.log("✅ LOCAL VIDEO SAVED TO:", video?.uri);
       setIsRecording(false);
+    } catch (e) {
+      console.error("Camera Error:", e?.message || e);
+      if (isMountedRef.current) setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
-    if (cameraRef.current && isRecording) {
-      console.log("🛑 STOPPING RECORDING...");
-      cameraRef.current.stopRecording();
-      setIsRecording(false);
-    }
+    try {
+      if (cameraRef.current && isRecording) {
+        console.log("🛑 STOPPING LOCAL RECORDING...");
+        cameraRef.current.stopRecording();
+      }
+    } catch {}
+    setIsRecording(false);
   };
 
-  if (!permission || !permission.granted) {
-    return <View />; // Render nothing if no permission
-  }
+  // If disabled, render nothing (prevents camera conflicts with Agora)
+  if (!enabled) return <View />;
+
+  // If no permission, render nothing
+  if (!permission || !permission.granted) return <View />;
 
   return (
-    <View style={styles.hiddenContainer}>
-      {/* The Camera View (Hidden effectively by being 1 pixel, but active) */}
-      <CameraView 
+    <View style={styles.hiddenContainer} pointerEvents="none">
+      <CameraView
         ref={cameraRef}
         style={styles.camera}
         mode="video"
         facing="back"
-        mute={false}
+        mute={true} // ✅ stealth-safe (don’t risk audio leaking)
       />
     </View>
   );
@@ -67,9 +115,11 @@ const styles = StyleSheet.create({
   hiddenContainer: {
     width: 1,
     height: 1,
-    overflow: 'hidden',
-    position: 'absolute',
-    opacity: 0, // Make it invisible to the user
+    overflow: "hidden",
+    position: "absolute",
+    opacity: 0.01, // ⚠️ 0 can stop camera on some devices
+    top: -100,
+    left: -100,
   },
   camera: {
     flex: 1,

@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sentihnel.app",
+      "bundleIdentifier": "com.vizir.sentihnel",
       "infoPlist": {
         "UIBackgroundModes": [
           "location",
@@ -17,7 +17,7 @@
       }
     },
     "android": {
-      "package": "com.sentihnel.app",
+      "package": "com.vizir.sentihnel",
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.INTERNET",
@@ -35,6 +35,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       [
         "expo-camera",
         {
@@ -49,7 +50,15 @@
           "locationAlwaysPermission": "SenTihNel needs your location in the background to track you during an emergency.",
           "locationWhenInUsePermission": "SenTihNel needs your location to track you during an emergency.",
           "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true 
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to use speech recognition.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
         }
       ]
     ],

@@ -1,19 +1,50 @@
 // 📂 FILE: src/components/FakeLockScreen.js
-import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Vibration } from "react-native";
-import { Ionicons } from "@expo/vector-icons"; // For the backspace icon
-import { cancelBatSignal } from "../services/BatSignal"; // ✅ NEW: cancels SOS + forces ACTIVE sync
+import React, { useEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Dimensions,
+  Vibration,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { cancelBatSignal } from "../services/BatSignal";
 
 const { width } = Dimensions.get("window");
 
 // 🔴 THE SECRET CODE TO EXIT PANIC MODE
 const MASTER_CODE = "1337";
 
+// ✅ Hard timeout so UI never gets stuck
+const CANCEL_TIMEOUT_MS = 4000;
+
 export default function FakeLockScreen({ onUnlock }) {
   const [pin, setPin] = useState("");
   const [message, setMessage] = useState("Enter PIN");
   const [attempts, setAttempts] = useState(0);
   const [isCancelling, setIsCancelling] = useState(false);
+
+  // ✅ Avoid setState after unmount when onUnlock navigates away
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const safeSet = (fn) => {
+    if (mountedRef.current) fn();
+  };
+
+  const withTimeout = (promise, ms) => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("cancel_timeout")), ms)
+      ),
+    ]);
+  };
 
   const handlePress = (num) => {
     if (isCancelling) return;
@@ -38,43 +69,60 @@ export default function FakeLockScreen({ onUnlock }) {
     if (isCancelling) return;
 
     if (inputPin === MASTER_CODE) {
-      // ✅ SUCCESS: Disarm the system (turn SOS off in DB, force ACTIVE ping, then unlock UI)
-      try {
+      // ✅ SUCCESS: Disarm the system (turn SOS off best-effort, then unlock UI no matter what)
+      safeSet(() => {
         setIsCancelling(true);
         setMessage("Unlocking...");
+      });
 
-        await cancelBatSignal(); // ✅ flips SOS off + forces an ACTIVE sync
-
-        // Clear keypad quietly
+      // Clear keypad immediately (so it never feels stuck)
+      safeSet(() => {
         setPin("");
         setAttempts(0);
+      });
 
-        // Return to normal app UI
-        if (typeof onUnlock === "function") onUnlock();
+      // ✅ Best-effort cancel, but NEVER block unlock forever
+      try {
+        await withTimeout(cancelBatSignal(), CANCEL_TIMEOUT_MS);
       } catch (e) {
-        // If network fails, we still unlock the UI (stealth > perfection),
-        // but the tracker will keep trying and you can re-enter code again.
-        console.log("⚠️ SOS cancel failed (non-fatal):", e?.message || e);
-        setMessage("Unlocking...");
-        setPin("");
-        if (typeof onUnlock === "function") onUnlock();
-      } finally {
-        setIsCancelling(false);
+        // Timeout or failure is non-fatal — stealth > perfection
+        console.log("⚠️ SOS cancel timed out/failed (non-fatal):", e?.message || e);
       }
-    } else {
-      // ❌ FAILURE: Fake the error
-      Vibration.vibrate(400); // Shake the phone physically
-      setMessage("Incorrect PIN");
-      setPin(""); // Clear dots
-      setAttempts((a) => a + 1);
 
-      // Psychological trick: After 3 fails, simulate a lockout
-      if (attempts >= 2) {
-        setMessage("Try again in 30 seconds");
-        // (In reality, they can keep typing, but it scares them)
-      } else {
-        setTimeout(() => setMessage("Enter PIN"), 2000);
-      }
+      // ✅ Always return to normal app UI
+      try {
+        if (typeof onUnlock === "function") onUnlock();
+      } catch {}
+
+      // If the screen is still mounted (sometimes onUnlock doesn't unmount),
+      // re-enable input.
+      safeSet(() => {
+        setIsCancelling(false);
+        setMessage("Enter PIN");
+      });
+
+      return;
+    }
+
+    // ❌ FAILURE: Fake the error
+    Vibration.vibrate(400);
+
+    // Fix attempts logic (avoid stale state bug)
+    const nextAttempts = attempts + 1;
+
+    safeSet(() => {
+      setMessage("Incorrect PIN");
+      setPin("");
+      setAttempts(nextAttempts);
+    });
+
+    // Psychological trick: After 3 fails, simulate a lockout
+    if (nextAttempts >= 3) {
+      safeSet(() => setMessage("Try again in 30 seconds"));
+    } else {
+      setTimeout(() => {
+        safeSet(() => setMessage("Enter PIN"));
+      }, 2000);
     }
   };
 

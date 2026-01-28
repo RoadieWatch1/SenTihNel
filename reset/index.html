@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SenTihNel • Reset Password</title>
+    <style>
+      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#05070a; color:#e5e7eb; }
+      .wrap { max-width:520px; margin:48px auto; padding:24px; }
+      .card { border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:20px; background: rgba(255,255,255,.03); }
+      h1 { font-size:20px; margin:0 0 10px; }
+      p { opacity:.85; line-height:1.4; }
+      label { display:block; margin:14px 0 6px; font-size:13px; opacity:.9; }
+      input { width:100%; padding:12px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:#0b0f16; color:#e5e7eb; }
+      button { margin-top:14px; width:100%; padding:12px; border-radius:12px; border:0; background:#22c55e; color:#041007; font-weight:700; cursor:pointer; }
+      button:disabled { opacity:.55; cursor:not-allowed; }
+      .msg { margin-top:12px; font-size:13px; opacity:.95; white-space:pre-wrap; }
+      .err { color:#fb7185; }
+      .ok { color:#34d399; }
+      .muted { opacity:.75; font-size:12px; margin-top:10px; }
+      code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 8px; }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Reset your password</h1>
+        <p>Enter a new password below. This page only works from a Supabase reset email link.</p>
+
+        <label>New password</label>
+        <input id="p1" type="password" minlength="8" placeholder="At least 8 characters" autocomplete="new-password" />
+
+        <label>Confirm password</label>
+        <input id="p2" type="password" minlength="8" placeholder="Repeat password" autocomplete="new-password" />
+
+        <button id="btn" type="button">Update password</button>
+        <div id="msg" class="msg"></div>
+        <div id="debug" class="muted"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+      const SUPABASE_URL = "https://yjnqyzozvrgajavndgbm.supabase.co";
+      const SUPABASE_KEY = "sb_publishable_t3KmD3g6zK3c-4cyzGMrQw_carXwjUq"; // anon/publishable only
+      const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+      const elMsg = document.getElementById("msg");
+      const elDebug = document.getElementById("debug");
+      const btn = document.getElementById("btn");
+
+      const msg = (t, cls) => {
+        elMsg.className = "msg " + (cls || "");
+        elMsg.textContent = t || "";
+      };
+
+      const setDebug = (t) => {
+        elDebug.textContent = t || "";
+      };
+
+      const disableBtn = (v) => {
+        btn.disabled = !!v;
+        btn.textContent = v ? "Working…" : "Update password";
+      };
+
+      async function ensureSessionFromLink() {
+        const href = window.location.href;
+        const url = new URL(href);
+
+        setDebug(`URL: ${url.origin}${url.pathname}${url.search}${url.hash ? " (hash present)" : ""}`);
+
+        // ✅ 0) If we ALREADY have a session (common when using /auth/confirm bridge), we’re good.
+        const existing = await supabase.auth.getSession();
+        if (existing?.data?.session) return;
+
+        const hashParams = new URLSearchParams((url.hash || "").replace(/^#/, ""));
+
+        // ✅ 1) error in hash
+        const errDesc = hashParams.get("error_description");
+        const errCode = hashParams.get("error_code");
+        if (errDesc || errCode) {
+          throw new Error(
+            "This reset link is invalid or expired.\n\n" +
+            `Error: ${decodeURIComponent(errDesc || "")}\n` +
+            `Code: ${errCode || "unknown"}\n\n` +
+            "Go back to the app and request a NEW password reset email."
+          );
+        }
+
+        // ✅ 2) PKCE code
+        const code = url.searchParams.get("code");
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          return;
+        }
+
+        // ✅ 3) token_hash + type
+        const token_hash = url.searchParams.get("token_hash");
+        const type = url.searchParams.get("type");
+        if (token_hash && type) {
+          const { error } = await supabase.auth.verifyOtp({ token_hash, type });
+          if (error) throw error;
+          return;
+        }
+
+        // ✅ 4) access/refresh in hash
+        const access_token = hashParams.get("access_token");
+        const refresh_token = hashParams.get("refresh_token");
+        if (access_token && refresh_token) {
+          const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+          if (error) throw error;
+          return;
+        }
+
+        throw new Error(
+          "Missing recovery parameters.\n\n" +
+          "This means the email link you clicked did NOT include the Supabase recovery token.\n\n" +
+          "Fix (recommended): Update your Supabase Reset Password template to use:\n" +
+          "https://sentihnel.com/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next={{ .RedirectTo }}\n\n" +
+          "Then request a NEW reset email and click that new link."
+        );
+      }
+
+      btn.addEventListener("click", async () => {
+        try {
+          disableBtn(true);
+          msg("Checking reset link…");
+
+          await ensureSessionFromLink();
+
+          const p1 = document.getElementById("p1").value || "";
+          const p2 = document.getElementById("p2").value || "";
+
+          if (p1.length < 8) {
+            msg("Password must be at least 8 characters.", "err");
+            return;
+          }
+          if (p1 !== p2) {
+            msg("Passwords do not match.", "err");
+            return;
+          }
+
+          msg("Updating password…");
+          const { error } = await supabase.auth.updateUser({ password: p1 });
+          if (error) throw error;
+
+          await supabase.auth.signOut();
+
+          msg("Password updated. Go back to the app and log in.", "ok");
+        } catch (e) {
+          msg(e?.message || String(e), "err");
+        } finally {
+          disableBtn(false);
+        }
+      });
+    </script>
+  </body>
+</html>

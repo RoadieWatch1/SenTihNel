@@ -1,0 +1,10 @@
+/auth/confirm     /auth/confirm/index.html 200
+/auth/confirm/*   /auth/confirm/index.html 200
+
+/reset       /reset/index.html   200
+/reset/*     /reset/index.html   200
+
+/confirm     /confirm/index.html 200
+/confirm/*   /confirm/index.html 200
+
+/*           /index.html         200
