@@ -28,6 +28,10 @@ yarn-error.*
 
 # macOS
 .DS_Store
+
+# IDE settings
+.vscode/
+.claude/
 *.pem
 
 # local env files
