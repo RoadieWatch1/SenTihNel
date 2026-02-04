@@ -1,0 +1,6 @@
+android/
+ios/
+node_modules/
+.expo/
+firebase-admin.json
+.DS_Store

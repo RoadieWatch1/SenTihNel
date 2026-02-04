@@ -25,7 +25,7 @@ import { Vibration } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY } from "../lib/supabase";
 import { getDeviceId } from "./Identity";
-import { setSOSActive, clearSOS, forceOneShotSync } from "./LiveTracker";
+import { setSOSActive, clearSOS, forceOneShotSync, stopLiveTracking } from "./LiveTracker";
 
 // 🔴 CONFIGURATION
 const GUARDIAN_SITE = "https://sentihnel.com";
@@ -39,10 +39,14 @@ const GUARDIAN_PHONE_NUMBER = "+14708123029";
 
 // Storage
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
+const STORAGE_KEY_DEVICE_NAME = "sentinel_device_display_name";
 
 // ✅ Cloud Recording Edge Functions (Supabase)
 const REC_START_FN = "agora-recording-start";
 const REC_STOP_FN = "agora-recording-stop";
+
+// ✅ SOS Push Notification Edge Function (fallback if pg_net not available)
+const SOS_NOTIFY_FN = "send-sos-notifications";
 
 // ✅ AUTO-START CLOUD RECORDING ONLY WHEN SOS IS ACTIVATED (backup safety)
 const ENABLE_CLOUD_RECORDING_AUTOSTART = true;
@@ -115,6 +119,15 @@ async function getGroupId() {
   }
 }
 
+async function getDisplayName() {
+  try {
+    const name = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_NAME);
+    return name ? String(name).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function safeSetSOSActive() {
   // Some builds had setSOSActive(true), some had setSOSActive() — support both safely.
   try {
@@ -155,6 +168,18 @@ async function safeForceActiveSync() {
   } catch {}
   try {
     await forceOneShotSync();
+  } catch {}
+}
+
+// ✅ PRIVACY RESTORATION: Force sync as OFFLINE (used when stopLiveTracking fails)
+async function safeForceOfflineSync() {
+  try {
+    await forceOneShotSync({ status: "OFFLINE" });
+    return;
+  } catch {}
+  // Last resort: just clear SOS status
+  try {
+    await clearSOS();
   } catch {}
 }
 
@@ -520,6 +545,44 @@ async function tryStopCloudRecording({ deviceId, channel }) {
   }
 }
 
+/**
+ * ✅ Trigger push notifications via Edge Function (fallback for when pg_net isn't available)
+ * This is fire-and-forget to avoid blocking SOS activation
+ */
+async function triggerPushNotifications({ deviceId, groupId, displayName, lat, lng }) {
+  try {
+    if (!deviceId || !groupId) return;
+
+    // Fire-and-forget (don't await, don't block SOS)
+    invokeFunctionWithTimeout(
+      SOS_NOTIFY_FN,
+      {
+        payload: {
+          device_id: deviceId,
+          display_name: displayName || null,
+          group_id: groupId,
+          latitude: lat,
+          longitude: lng,
+          timestamp: new Date().toISOString(),
+        },
+      },
+      FN_TIMEOUT_MS
+    )
+      .then((out) => {
+        if (out.ok) {
+          console.log("✅ Push notification trigger sent via Edge Function");
+        } else {
+          console.log("⚠️ Push notification trigger failed (non-blocking):", out.error?.message);
+        }
+      })
+      .catch((e) => {
+        console.log("⚠️ Push notification trigger exception (non-blocking):", e?.message);
+      });
+  } catch (e) {
+    console.log("⚠️ Push notification trigger error (non-blocking):", e?.message);
+  }
+}
+
 // ✅ Start cloud recording ONCE per SOS activation, retrying (best-effort)
 async function safeStartCloudRecordingOnce(deviceId) {
   try {
@@ -554,7 +617,7 @@ async function safeStartCloudRecordingOnce(deviceId) {
  * ✅ Fleet-wide realtime broadcast.
  * NOTE: This is NOT push notifications. It will reach anyone currently online in the app.
  */
-async function tryBroadcastSOS({ groupId, deviceId, link, lat, lng }) {
+async function tryBroadcastSOS({ groupId, deviceId, displayName, link, lat, lng }) {
   if (!groupId) return false;
 
   try {
@@ -589,17 +652,20 @@ async function tryBroadcastSOS({ groupId, deviceId, link, lat, lng }) {
 
     const sosId = `SOS_${deviceId}_${Date.now()}`;
 
+    // ✅ FIX: Field names must match what SOSAlertManager expects
+    // SOSAlertManager looks for: device_id, display_name, latitude, longitude, timestamp
     const payload = {
       kind: "SOS",
       sos_id: sosId,
       device_id: deviceId,
+      display_name: displayName || null, // Sender's display name for immediate use
       group_id: groupId,
-      lat: Number.isFinite(lat) ? lat : null,
-      lng: Number.isFinite(lng) ? lng : null,
+      latitude: Number.isFinite(lat) ? lat : null,
+      longitude: Number.isFinite(lng) ? lng : null,
       link,
       title: "🚨 SOS ALERT",
-      body: "A fleet member triggered SOS. Tap to open Fleet Manager.",
-      ts: Date.now(),
+      body: `${displayName || "A fleet member"} triggered SOS. Tap to open Fleet Manager.`,
+      timestamp: Date.now(),
     };
 
     const out = await ch.send({ type: "broadcast", event: "sos", payload });
@@ -614,7 +680,7 @@ async function tryBroadcastSOS({ groupId, deviceId, link, lat, lng }) {
   }
 }
 
-async function tryBroadcastCancel({ groupId, deviceId }) {
+async function tryBroadcastCancel({ groupId, deviceId, displayName }) {
   if (!groupId) return false;
 
   try {
@@ -647,13 +713,15 @@ async function tryBroadcastCancel({ groupId, deviceId }) {
       return false;
     }
 
+    // ✅ FIX: Field names must match what SOSAlertManager expects
     const payload = {
       kind: "SOS_CANCEL",
       device_id: deviceId,
+      display_name: displayName || null,
       group_id: groupId,
       title: "✅ SOS CANCELED",
-      body: "The SOS alert was canceled.",
-      ts: Date.now(),
+      body: `${displayName || "Fleet member"}'s emergency has been resolved.`,
+      timestamp: Date.now(),
     };
 
     const out = await ch.send({ type: "broadcast", event: "sos_cancel", payload });
@@ -703,7 +771,7 @@ export const sendBatSignal = async (arg) => {
       ? String(arg.deviceId)
       : await getDeviceId();
 
-  // ✅ Cloud recording auto-start ONLY on SOS activation (backup)
+  // Cloud recording auto-start ONLY on SOS activation (backup)
   safeStartCloudRecordingOnce(deviceId);
 
   // Resolve guardian number (kept intact even though we're not using SMS by default)
@@ -713,6 +781,7 @@ export const sendBatSignal = async (arg) => {
       : GUARDIAN_PHONE_NUMBER;
 
   const groupId = await getGroupId();
+  const displayName = await getDisplayName();
 
   // ✅ FAST last-known first, then refine
   const { fast, refined } = await getFastThenRefineLocation();
@@ -725,18 +794,22 @@ export const sendBatSignal = async (arg) => {
   const fullLink = buildLink(deviceId, fastLat, fastLng);
   console.log("🔗 SOS LINK:", fullLink);
 
-  // ✅ Force immediate SOS sync using last-known coords if we have them
+  // Force immediate SOS sync using last-known coords if we have them
   await safeForceSOSSync({ lat: fastLat, lng: fastLng, accuracy: fastAcc });
 
-  // ✅ Fleet-wide in-app alert (realtime broadcast)
+  // Fleet-wide in-app alert (realtime broadcast)
   const broadcastOk = await tryBroadcastSOS({
     groupId,
     deviceId,
+    displayName,
     link: fullLink,
     lat: fastLat,
     lng: fastLng,
   });
   if (broadcastOk) console.log("✅ SOS broadcast delivered (in-app)");
+
+  // Trigger push notifications for background/offline users (fallback if pg_net unavailable)
+  triggerPushNotifications({ deviceId, groupId, displayName, lat: fastLat, lng: fastLng });
 
   // ✅ If we got a refined current GPS fix, sync again (best-effort upgrade)
   const refLat = safeNum(refined?.coords?.latitude, null);
@@ -794,9 +867,91 @@ export const sendBatSignal = async (arg) => {
   return true;
 };
 
-// ✅ Hidden Safe Cancel (won’t hang)
+/**
+ * ✅ CHECK-IN: Send "I'm OK" status to fleet (non-SOS)
+ * Broadcasts a check-in message without triggering emergency protocols
+ */
+export const sendCheckIn = async () => {
+  console.log("✅ CHECK-IN: Sending 'I'm OK' to fleet...");
+
+  try {
+    const deviceId = await getDeviceId();
+    const groupId = await getGroupId();
+    const displayName = await getDisplayName();
+
+    if (!deviceId || !groupId) {
+      console.log("⚠️ CHECK-IN: No device or group context");
+      return false;
+    }
+
+    // Get current location for the check-in
+    const { fast } = await getFastThenRefineLocation();
+    const lat = safeNum(fast?.coords?.latitude, null);
+    const lng = safeNum(fast?.coords?.longitude, null);
+
+    // Broadcast check-in to fleet
+    const ch = supabase.channel(`fleet:${groupId}`);
+
+    const subscribed = await new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (!done) resolve(false);
+      }, 2500);
+
+      ch.subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          done = true;
+          clearTimeout(timer);
+          resolve(true);
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          done = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+    });
+
+    if (!subscribed) {
+      try {
+        await supabase.removeChannel(ch);
+      } catch {}
+      return false;
+    }
+
+    const payload = {
+      kind: "CHECK_IN",
+      device_id: deviceId,
+      display_name: displayName || null,
+      group_id: groupId,
+      latitude: Number.isFinite(lat) ? lat : null,
+      longitude: Number.isFinite(lng) ? lng : null,
+      title: "✅ Check-In",
+      body: `${displayName || "A fleet member"} checked in: I'm OK`,
+      timestamp: Date.now(),
+    };
+
+    const out = await ch.send({ type: "broadcast", event: "check_in", payload });
+
+    try {
+      await supabase.removeChannel(ch);
+    } catch {}
+
+    const success = !!out && (!out.status || out.status === "ok");
+    if (success) console.log("✅ CHECK-IN: Broadcast delivered");
+
+    return success;
+  } catch (e) {
+    console.log("⚠️ CHECK-IN error:", e?.message || e);
+    return false;
+  }
+};
+
+// ✅ Hidden Safe Cancel (won't hang)
+// ✅ PRIVACY RESTORATION: When SOS is cancelled, fleet loses ALL access to
+//    location, camera, and audio until user triggers SOS again.
 export const cancelBatSignal = async () => {
-  console.log("🟢 SOS CANCEL: Returning to ACTIVE mode...");
+  console.log("🟢 SOS CANCEL: Restoring privacy (stopping all sharing)...");
 
   // Stop cloud recording (best-effort) + clear started flag/session
   try {
@@ -815,18 +970,27 @@ export const cancelBatSignal = async () => {
     await withTimeout(clearSOS(), CANCEL_TIMEOUT_MS, "clearSOS_timeout");
   } catch {}
 
-  // Force ACTIVE sync with timeout guard
+  // ✅ PRIVACY RESTORATION: Stop background GPS tracking completely
+  // This marks user as OFFLINE and stops all location updates to fleet
   try {
-    await withTimeout(safeForceActiveSync(), CANCEL_TIMEOUT_MS, "forceActiveSync_timeout");
-  } catch {}
+    await withTimeout(stopLiveTracking(), CANCEL_TIMEOUT_MS, "stopLiveTracking_timeout");
+    console.log("✅ GPS tracking stopped (privacy restored)");
+  } catch (e) {
+    console.log("⚠️ stopLiveTracking timeout/failed (non-fatal):", e?.message || e);
+    // Fallback: at least try to sync OFFLINE status
+    try {
+      await withTimeout(safeForceOfflineSync(), CANCEL_TIMEOUT_MS, "forceOfflineSync_timeout");
+    } catch {}
+  }
 
   // Best-effort broadcast cancel to fleet (timeout guarded)
   try {
     const deviceId = await getDeviceId();
     const groupId = await getGroupId();
+    const displayName = await getDisplayName();
     if (deviceId && groupId) {
       const ok = await withTimeout(
-        tryBroadcastCancel({ groupId, deviceId }),
+        tryBroadcastCancel({ groupId, deviceId, displayName }),
         2500,
         "broadcast_cancel_timeout"
       );

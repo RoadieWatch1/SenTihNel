@@ -1,12 +1,17 @@
-import React from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Drawer } from "expo-router/drawer";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import {
   DrawerContentScrollView,
   DrawerItemList,
 } from "@react-navigation/drawer";
+import SOSAlertOverlay from "../../src/components/SOSAlertOverlay";
+import SOSAlertManager from "../../src/services/SOSAlertManager";
+import AlarmService from "../../src/services/AlarmService";
 
 function CustomDrawerContent(props) {
   const handleLogout = async () => {
@@ -58,8 +63,95 @@ function CustomDrawerContent(props) {
 }
 
 export default function AppLayout() {
+  const router = useRouter();
+  const [sosAlert, setSosAlert] = useState(null); // { deviceId, displayName, latitude, longitude }
+
+  // Initialize SOS Alert Manager
+  useEffect(() => {
+    let mounted = true;
+
+    const initSOSManager = async () => {
+      try {
+        const groupId = await AsyncStorage.getItem("sentinel_group_id");
+        const deviceId = await AsyncStorage.getItem("sentinel_device_id");
+
+        if (!groupId) {
+          console.log("AppLayout: No group ID, skipping SOS manager init");
+          return;
+        }
+
+        await SOSAlertManager.initialize(groupId, deviceId, {
+          onSOSReceived: (data) => {
+            if (!mounted) return;
+            console.log("AppLayout: SOS received", data);
+            setSosAlert({
+              deviceId: data.deviceId,
+              displayName: data.displayName,
+              latitude: data.latitude,
+              longitude: data.longitude,
+            });
+          },
+          onSOSCancelled: (deviceId) => {
+            if (!mounted) return;
+            console.log("AppLayout: SOS cancelled", deviceId);
+            // Clear overlay if this was the displayed alert
+            setSosAlert((prev) =>
+              prev?.deviceId === deviceId ? null : prev
+            );
+          },
+          onSOSAcknowledged: (deviceId, byDeviceId) => {
+            console.log("AppLayout: SOS acknowledged", deviceId, "by", byDeviceId);
+          },
+        });
+
+        console.log("AppLayout: SOS Alert Manager initialized");
+      } catch (e) {
+        console.log("AppLayout: Failed to init SOS manager", e);
+      }
+    };
+
+    initSOSManager();
+
+    return () => {
+      mounted = false;
+      SOSAlertManager.cleanup();
+    };
+  }, []);
+
+  // Handle SOS alert actions
+  const handleAcknowledge = useCallback(async () => {
+    if (sosAlert?.deviceId) {
+      await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
+    }
+    setSosAlert(null);
+  }, [sosAlert]);
+
+  const handleViewLocation = useCallback(() => {
+    // Stop alarm but keep tracking
+    AlarmService.stopAlarm();
+    // Navigate to fleet screen to see location
+    router.push("/fleet");
+    setSosAlert(null);
+  }, [router]);
+
+  const handleDismiss = useCallback(async () => {
+    await SOSAlertManager.dismissAllAlerts();
+    setSosAlert(null);
+  }, []);
+
   return (
-    <Drawer
+    <>
+      {/* SOS Alert Overlay - renders above everything */}
+      <SOSAlertOverlay
+        visible={sosAlert !== null}
+        senderName={sosAlert?.displayName}
+        senderDeviceId={sosAlert?.deviceId}
+        onAcknowledge={handleAcknowledge}
+        onViewLocation={handleViewLocation}
+        onDismiss={handleDismiss}
+      />
+
+      <Drawer
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerShown: false, // stealth
@@ -105,7 +197,41 @@ export default function AppLayout() {
           ),
         }}
       />
+
+      <Drawer.Screen
+        name="manager-dashboard"
+        options={{
+          drawerLabel: "Work Dashboard",
+          title: "Work Dashboard",
+          drawerIcon: ({ color, size }) => (
+            <Ionicons name="briefcase-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Drawer.Screen
+        name="family-guide"
+        options={{
+          drawerLabel: "Family Fleet Guide",
+          title: "Family Guide",
+          drawerIcon: ({ color, size }) => (
+            <Ionicons name="home-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Drawer.Screen
+        name="work-guide"
+        options={{
+          drawerLabel: "Work Fleet Guide",
+          title: "Work Guide",
+          drawerIcon: ({ color, size }) => (
+            <Ionicons name="business-outline" size={size} color={color} />
+          ),
+        }}
+      />
     </Drawer>
+    </>
   );
 }
 

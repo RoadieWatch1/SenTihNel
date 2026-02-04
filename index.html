@@ -24,6 +24,7 @@
       --accent: #00f3ff;
       --danger: #ff003c;
       --success: #00ff9d;
+      --warning: #ffb950;
 
       --text-main: #e0f7ff;
       --text-muted: rgba(0, 243, 255, 0.62);
@@ -442,6 +443,36 @@
       animation: pulse-red 1.5s infinite;
     }
 
+    /* Audio unmute button */
+    .audio-btn {
+      width: 100%;
+      background: transparent;
+      border: 1px solid rgba(255,185,80,0.85);
+      color: rgba(255,185,80,0.95);
+      padding: 15px;
+      font-family: var(--font-ui);
+      font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      text-transform: uppercase;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 15px 100%, 0 calc(100% - 15px));
+      margin-top: 12px;
+      transition: all 0.2s;
+      animation: pulse-orange 1.5s infinite;
+    }
+    .audio-btn:hover { background: rgba(255,185,80,0.15); }
+    .audio-btn.unmuted {
+      background: rgba(0,255,157,0.15);
+      border-color: rgba(0,255,157,0.85);
+      color: rgba(0,255,157,0.95);
+      animation: none;
+    }
+    @keyframes pulse-orange { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
     /* MARKER */
     .user-marker { position: relative; width: 80px; height: 80px; }
     .pulse-ring {
@@ -550,10 +581,419 @@
     @keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
     @keyframes bars { 0%{height:20%} 100%{height:100%} }
+
+    /* ═══════════════════════════════════════════════════════════════
+       LOGIN OVERLAY
+       ═══════════════════════════════════════════════════════════════ */
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.4s, visibility 0.4s;
+    }
+    .login-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .login-box {
+      background: var(--panel-bg);
+      border: 1px solid var(--accent);
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      clip-path: polygon(20px 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%, 0 20px);
+      box-shadow: 0 0 40px rgba(0, 243, 255, 0.15), inset 0 0 60px rgba(0, 243, 255, 0.03);
+    }
+
+    .login-logo {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .login-logo h1 {
+      font-family: var(--font-ui);
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin: 0;
+      text-shadow: 0 0 20px rgba(0, 243, 255, 0.5);
+    }
+    .login-logo p {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin: 8px 0 0;
+    }
+
+    .login-input {
+      width: 100%;
+      background: rgba(0, 243, 255, 0.05);
+      border: 1px solid rgba(0, 243, 255, 0.35);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .login-input::placeholder {
+      color: var(--text-muted);
+    }
+    .login-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 15px rgba(0, 243, 255, 0.2);
+    }
+
+    .login-btn {
+      width: 100%;
+      background: rgba(0, 243, 255, 0.12);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--font-ui);
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    }
+    .login-btn:hover {
+      background: var(--accent);
+      color: #000;
+      box-shadow: 0 0 25px rgba(0, 243, 255, 0.35);
+    }
+    .login-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .login-error {
+      background: rgba(255, 0, 60, 0.12);
+      border: 1px solid rgba(255, 0, 60, 0.5);
+      color: #ff8fa3;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 12px;
+      margin-bottom: 16px;
+      text-align: center;
+      display: none;
+    }
+    .login-error.show { display: block; }
+
+    .login-toggle {
+      text-align: center;
+      margin-top: 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .login-toggle a {
+      color: var(--accent);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .login-toggle a:hover {
+      text-decoration: underline;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       FLEET SELECTOR & HEADER
+       ═══════════════════════════════════════════════════════════════ */
+    .sidebar-header {
+      padding: 16px 20px;
+      background: rgba(0, 243, 255, 0.04);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .fleet-selector {
+      flex: 1;
+      background: rgba(0, 243, 255, 0.06);
+      border: 1px solid rgba(0, 243, 255, 0.4);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 10px 12px;
+      cursor: pointer;
+      outline: none;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .fleet-selector:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+    }
+    .fleet-selector option {
+      background: #0a0f18;
+      color: var(--text-main);
+    }
+
+    .logout-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 0, 60, 0.5);
+      color: rgba(255, 0, 60, 0.85);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      transition: all 0.2s;
+    }
+    .logout-btn:hover {
+      background: rgba(255, 0, 60, 0.15);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       MULTI-SOS PANEL (Active Alerts List)
+       ═══════════════════════════════════════════════════════════════ */
+    .sos-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .sos-card {
+      background: rgba(255, 0, 60, 0.08);
+      border: 1px solid rgba(255, 0, 60, 0.35);
+      padding: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .sos-card:hover {
+      background: rgba(255, 0, 60, 0.15);
+      border-color: rgba(255, 0, 60, 0.6);
+    }
+    .sos-card.active {
+      background: rgba(255, 0, 60, 0.2);
+      border-color: var(--danger);
+      box-shadow: 0 0 15px rgba(255, 0, 60, 0.2);
+    }
+
+    .sos-card-icon {
+      width: 36px;
+      height: 36px;
+      background: rgba(255, 0, 60, 0.85);
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 10px;
+      letter-spacing: 1px;
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    }
+
+    .sos-card-info {
+      flex: 1;
+    }
+    .sos-card-name {
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .sos-card-meta {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .no-sos-message {
+      padding: 20px;
+      text-align: center;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       FLEET MEMBER MARKERS (Different colors by status)
+       ═══════════════════════════════════════════════════════════════ */
+    .member-marker {
+      position: relative;
+      width: 50px;
+      height: 50px;
+      cursor: pointer;
+    }
+    .member-marker .pulse-ring {
+      position: absolute;
+      top: 5px; left: 5px;
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 243, 255, 0.6);
+      animation: pulse 2s infinite;
+    }
+    .member-marker .pulse-ring.sos {
+      border-color: rgba(255, 0, 60, 0.85);
+      box-shadow: 0 0 15px rgba(255, 0, 60, 0.3);
+    }
+    .member-marker .pulse-ring.offline {
+      border-color: rgba(100, 100, 100, 0.5);
+      animation: none;
+    }
+
+    .member-marker .marker-icon {
+      position: absolute;
+      top: 10px; left: 10px;
+      width: 30px; height: 30px;
+      background: rgba(0, 243, 255, 0.85);
+      color: #000;
+      font-weight: 800;
+      font-size: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    }
+    .member-marker .marker-icon.sos {
+      background: rgba(255, 0, 60, 0.92);
+      box-shadow: 0 0 10px rgba(255, 0, 60, 0.4);
+    }
+    .member-marker .marker-icon.offline {
+      background: rgba(80, 80, 80, 0.7);
+    }
+
+    .member-popup {
+      background: rgba(2, 4, 8, 0.95);
+      border: 1px solid var(--accent);
+      padding: 10px 14px;
+      min-width: 150px;
+    }
+    .member-popup-name {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .member-popup-status {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .member-popup-status.sos {
+      color: var(--danger);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       FLEET MEMBERS LIST (in sidebar)
+       ═══════════════════════════════════════════════════════════════ */
+    .member-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .member-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: rgba(0, 243, 255, 0.04);
+      border-left: 2px solid rgba(0, 243, 255, 0.3);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .member-row:hover {
+      background: rgba(0, 243, 255, 0.08);
+    }
+    .member-row.sos {
+      background: rgba(255, 0, 60, 0.08);
+      border-left-color: var(--danger);
+    }
+    .member-row.offline {
+      opacity: 0.5;
+      border-left-color: rgba(100, 100, 100, 0.5);
+    }
+
+    .member-row-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .member-row-dot.sos {
+      background: var(--danger);
+      animation: blink 1s infinite;
+    }
+    .member-row-dot.offline {
+      background: #555;
+    }
+
+    .member-row-name {
+      flex: 1;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      color: var(--text-main);
+    }
+    .member-row-status {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .member-row-status.sos {
+      color: var(--danger);
+    }
   </style>
 </head>
 
 <body>
+  <!-- ═══════════════════════════════════════════════════════════════
+       LOGIN OVERLAY
+       ═══════════════════════════════════════════════════════════════ -->
+  <div class="login-overlay" id="login-overlay">
+    <div class="login-box">
+      <div class="login-logo">
+        <h1>SenTihNel</h1>
+        <p>Guardian Command Center</p>
+      </div>
+
+      <div class="login-error" id="login-error"></div>
+
+      <input type="email" class="login-input" id="login-email" placeholder="EMAIL ADDRESS" autocomplete="email" />
+      <input type="password" class="login-input" id="login-password" placeholder="PASSWORD" autocomplete="current-password" />
+
+      <button class="login-btn" id="login-btn" onclick="handleLogin()">
+        SIGN IN
+      </button>
+
+      <div class="login-toggle">
+        <span id="login-toggle-text">Don't have an account?</span>
+        <a id="login-toggle-link" onclick="toggleAuthMode()">CREATE ONE</a>
+      </div>
+    </div>
+  </div>
+
   <div class="vignette"></div>
   <div class="scanlines"></div>
   <div class="noise"></div>
@@ -589,6 +1029,30 @@
         <div class="handle-text">▲ SLIDE UP FOR INTEL</div>
       </div>
 
+      <!-- ═══ FLEET SELECTOR HEADER ═══ -->
+      <div class="sidebar-header" id="sidebar-header">
+        <select class="fleet-selector" id="fleet-selector" onchange="handleFleetChange()">
+          <option value="">SELECT FLEET...</option>
+        </select>
+        <button class="logout-btn" onclick="handleLogout()">LOGOUT</button>
+      </div>
+
+      <!-- ═══ ACTIVE SOS ALERTS PANEL ═══ -->
+      <div class="panel" id="sos-panel">
+        <span class="panel-title">⚠️ Active SOS Alerts</span>
+        <div class="sos-list" id="sos-list">
+          <div class="no-sos-message">NO ACTIVE SOS IN THIS FLEET</div>
+        </div>
+      </div>
+
+      <!-- ═══ FLEET MEMBERS PANEL ═══ -->
+      <div class="panel" id="members-panel">
+        <span class="panel-title">👥 Fleet Members</span>
+        <div class="member-list" id="member-list">
+          <div class="no-sos-message">LOADING MEMBERS...</div>
+        </div>
+      </div>
+
       <div class="panel">
         <span class="panel-title">Live Feed (Camera Select)</span>
 
@@ -605,9 +1069,12 @@
           </div>
         </div>
 
+        <button class="audio-btn" id="audio-btn" onclick="toggleAudio()">
+          🔇 TAP TO ENABLE AUDIO
+        </button>
+
         <div class="control-note">
-          Plays ONE camera at a time (stronger stability). For true switching, SOS phone should publish two streams:
-          <br/>UID example: <b>DEVICE_ID:back</b> and <b>DEVICE_ID:front</b>.
+          Audio is muted by default (browser policy). Tap above to hear the SOS sender.
         </div>
       </div>
 
@@ -649,7 +1116,7 @@
     // 🔴 CONFIGURATION
     const APP_ID = '5478104d15af4128a42f0b6b59f87ef3';
     const SUPABASE_URL = 'https://yjnqyzozvrgajavndgbm.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_t3KmD3g6zK3c-4cyzGMrQw_carXwjUq';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqbnF5em96dnJnYWphdm5kZ2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3Mzk3MjksImV4cCI6MjA4MzMxNTcyOX0.8y7bbX4blhyDxZylhkfKQmgU5TfG2xWs51rSVSl-Bnw';
 
     const MAPTILER_KEY = 'oQ9e8JJpYONS3qpqUGq7';
     const STYLE_ORDER = ['darkmatter', 'dataviz-dark', 'toner-v2', 'streets-v2'];
@@ -658,13 +1125,27 @@
     const PREFER_LOW_STREAM = true; // reduces freeze risk on weaker networks
 
     const urlParams = new URLSearchParams(window.location.search);
-    const DEVICE_ID = urlParams.get('id');
+    let DEVICE_ID = urlParams.get('id'); // Now mutable - can be set when user selects SOS
 
     const URL_LAT = Number(urlParams.get('lat'));
     const URL_LNG = Number(urlParams.get('lng'));
     const HAS_URL_COORDS = Number.isFinite(URL_LAT) && Number.isFinite(URL_LNG);
 
     const DEFAULT_CENTER = [-84.3880, 33.7490]; // Atlanta
+
+    // ═══════════════════════════════════════════════════════════════
+    // AUTH & FLEET STATE
+    // ═══════════════════════════════════════════════════════════════
+    let currentUser = null;
+    let currentFleetId = null;
+    let userFleets = [];
+    let fleetMembers = [];
+    let activeSOSList = [];
+    let selectedSOSDeviceId = null;
+    let memberMarkers = {}; // deviceId -> marker instance
+    let fleetChannel = null;
+    let trackingChannel = null;
+    let authMode = 'login'; // 'login' or 'signup'
 
     const STYLE_OVERRIDE = (urlParams.get('style') || '').trim();
     const FINAL_STYLE_ORDER = STYLE_OVERRIDE ? [STYLE_OVERRIDE, ...STYLE_ORDER] : [...STYLE_ORDER];
@@ -695,6 +1176,7 @@
     // Agora state
     let agoraClient = null;
     let remoteAudioTrack = null;
+    let audioUnmuted = false; // User must click to enable audio (browser autoplay policy)
 
     // Store both camera tracks (if published)
     // Store only the front camera track
@@ -717,6 +1199,523 @@
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ═══════════════════════════════════════════════════════════════
+    // AUTH FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    function showLoginError(msg) {
+      const el = document.getElementById('login-error');
+      if (el) {
+        el.textContent = msg;
+        el.classList.add('show');
+      }
+    }
+
+    function hideLoginError() {
+      const el = document.getElementById('login-error');
+      if (el) el.classList.remove('show');
+    }
+
+    function toggleAuthMode() {
+      authMode = authMode === 'login' ? 'signup' : 'login';
+      const btn = document.getElementById('login-btn');
+      const toggleText = document.getElementById('login-toggle-text');
+      const toggleLink = document.getElementById('login-toggle-link');
+
+      if (authMode === 'signup') {
+        btn.textContent = 'CREATE ACCOUNT';
+        toggleText.textContent = 'Already have an account?';
+        toggleLink.textContent = 'SIGN IN';
+      } else {
+        btn.textContent = 'SIGN IN';
+        toggleText.textContent = "Don't have an account?";
+        toggleLink.textContent = 'CREATE ONE';
+      }
+      hideLoginError();
+    }
+
+    async function handleLogin() {
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const btn = document.getElementById('login-btn');
+
+      if (!email || !password) {
+        showLoginError('PLEASE ENTER EMAIL AND PASSWORD');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'AUTHENTICATING...';
+      hideLoginError();
+
+      try {
+        let result;
+        if (authMode === 'signup') {
+          result = await db.auth.signUp({ email, password });
+        } else {
+          result = await db.auth.signInWithPassword({ email, password });
+        }
+
+        if (result.error) {
+          showLoginError(result.error.message.toUpperCase());
+          btn.disabled = false;
+          btn.textContent = authMode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
+          return;
+        }
+
+        currentUser = result.data.user;
+        await onAuthSuccess();
+      } catch (e) {
+        showLoginError('AUTHENTICATION FAILED');
+        btn.disabled = false;
+        btn.textContent = authMode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
+      }
+    }
+
+    async function handleLogout() {
+      try {
+        await db.auth.signOut();
+      } catch (e) {}
+
+      currentUser = null;
+      currentFleetId = null;
+      userFleets = [];
+      fleetMembers = [];
+      activeSOSList = [];
+
+      // Clean up subscriptions
+      if (fleetChannel) {
+        try { db.removeChannel(fleetChannel); } catch (e) {}
+        fleetChannel = null;
+      }
+      if (trackingChannel) {
+        try { db.removeChannel(trackingChannel); } catch (e) {}
+        trackingChannel = null;
+      }
+
+      // Clear map markers
+      Object.values(memberMarkers).forEach(m => { try { m.remove(); } catch (e) {} });
+      memberMarkers = {};
+
+      document.getElementById('login-overlay').classList.remove('hidden');
+    }
+
+    async function onAuthSuccess() {
+      document.getElementById('login-overlay').classList.add('hidden');
+      await loadUserFleets();
+    }
+
+    async function checkExistingSession() {
+      try {
+        const { data: { session } } = await db.auth.getSession();
+        if (session && session.user) {
+          currentUser = session.user;
+          await onAuthSuccess();
+          return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // FLEET MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
+    async function loadUserFleets() {
+      if (!currentUser) return;
+
+      try {
+        // ✅ Get user's OWNED fleets (user is owner)
+        const { data: ownedGroups, error: ownedErr } = await db
+          .from('groups')
+          .select('id, name, invite_code, fleet_type')
+          .eq('owner_user_id', currentUser.id);
+
+        // ✅ Get user's JOINED fleets (user is member)
+        const { data: memberships, error: memberErr } = await db
+          .from('group_members')
+          .select('group_id, groups(id, name, invite_code, fleet_type)')
+          .eq('user_id', currentUser.id);
+
+        if (ownedErr) console.error('Failed to load owned fleets:', ownedErr);
+        if (memberErr) console.error('Failed to load joined fleets:', memberErr);
+
+        // Combine owned + joined fleets (deduplicated)
+        const ownedFleets = (ownedGroups || []).map(g => ({
+          id: g.id,
+          name: g.name || 'My Fleet',
+          type: g.fleet_type || 'family',
+          inviteCode: g.invite_code
+        }));
+
+        const joinedFleets = (memberships || [])
+          .filter(m => m.groups && !ownedFleets.some(o => o.id === m.group_id))
+          .map(m => ({
+            id: m.group_id,
+            name: m.groups?.name || 'Fleet',
+            type: m.groups?.fleet_type || 'family',
+            inviteCode: m.groups?.invite_code
+          }));
+
+        userFleets = [...ownedFleets, ...joinedFleets];
+
+        updateFleetSelector();
+
+        // Auto-select first fleet if available
+        if (userFleets.length > 0 && !currentFleetId) {
+          currentFleetId = userFleets[0].id;
+          document.getElementById('fleet-selector').value = currentFleetId;
+          await loadFleetData();
+        }
+      } catch (e) {
+        console.error('Error loading fleets:', e);
+      }
+    }
+
+    function updateFleetSelector() {
+      const select = document.getElementById('fleet-selector');
+      if (!select) return;
+
+      select.innerHTML = '<option value="">SELECT FLEET...</option>';
+
+      userFleets.forEach(fleet => {
+        const opt = document.createElement('option');
+        opt.value = fleet.id;
+        opt.textContent = `${fleet.name} (${fleet.type})`;
+        select.appendChild(opt);
+      });
+    }
+
+    async function handleFleetChange() {
+      const select = document.getElementById('fleet-selector');
+      const newFleetId = select.value;
+
+      if (!newFleetId || newFleetId === currentFleetId) return;
+
+      currentFleetId = newFleetId;
+      await loadFleetData();
+    }
+
+    async function loadFleetData() {
+      if (!currentFleetId) return;
+
+      // Clean up old subscriptions
+      if (fleetChannel) {
+        try { db.removeChannel(fleetChannel); } catch (e) {}
+      }
+      if (trackingChannel) {
+        try { db.removeChannel(trackingChannel); } catch (e) {}
+      }
+
+      // Clear old markers
+      Object.values(memberMarkers).forEach(m => { try { m.remove(); } catch (e) {} });
+      memberMarkers = {};
+
+      await loadFleetMembers();
+      subscribeToFleetUpdates();
+    }
+
+    async function loadFleetMembers() {
+      if (!currentFleetId) return;
+
+      try {
+        // ✅ Get tracking sessions directly for this fleet (includes all active devices)
+        const { data: trackingData, error: trackingErr } = await db
+          .from('tracking_sessions')
+          .select('*')
+          .eq('group_id', currentFleetId);
+
+        if (trackingErr) {
+          console.error('Failed to load tracking sessions:', trackingErr);
+        }
+
+        // ✅ Get device display names from devices table
+        const deviceIds = (trackingData || []).map(t => t.device_id).filter(Boolean);
+        let deviceNames = {};
+
+        if (deviceIds.length > 0) {
+          const { data: devices } = await db
+            .from('devices')
+            .select('device_id, display_name, user_id')
+            .in('device_id', deviceIds);
+
+          (devices || []).forEach(d => {
+            deviceNames[d.device_id] = d.display_name || 'Device';
+          });
+        }
+
+        // Build fleet members list from tracking sessions
+        fleetMembers = (trackingData || []).map(t => {
+          return {
+            userId: null,
+            deviceId: t.device_id,
+            displayName: deviceNames[t.device_id] || t.device_id || 'Unknown',
+            latitude: t.latitude,
+            longitude: t.longitude,
+            status: t.status || 'OFFLINE',
+            lastUpdated: t.last_updated,
+            battery: t.battery_level,
+            gpsQuality: t.gps_quality
+          };
+        });
+
+        // Update active SOS list
+        activeSOSList = fleetMembers.filter(m => m.status === 'SOS');
+
+        updateMembersList();
+        updateSOSList();
+        updateMapMarkers();
+
+        // Auto-select first SOS if available and none selected
+        if (activeSOSList.length > 0 && !selectedSOSDeviceId) {
+          selectSOSMember(activeSOSList[0].deviceId);
+        }
+      } catch (e) {
+        console.error('Error loading fleet members:', e);
+      }
+    }
+
+    function subscribeToFleetUpdates() {
+      if (!currentFleetId) return;
+
+      // ✅ Subscribe to ALL tracking updates for this fleet (catches new devices too)
+      trackingChannel = db.channel(`fleet-tracking-${currentFleetId}`)
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'tracking_sessions', filter: `group_id=eq.${currentFleetId}` },
+          (payload) => {
+            const row = payload && (payload.new || payload.old);
+            if (row) handleMemberUpdate(row);
+          }
+        )
+        .subscribe();
+    }
+
+    function handleMemberUpdate(data) {
+      const deviceId = data.device_id;
+      const memberIdx = fleetMembers.findIndex(m => m.deviceId === deviceId);
+
+      if (memberIdx >= 0) {
+        // Update existing member
+        fleetMembers[memberIdx] = {
+          ...fleetMembers[memberIdx],
+          latitude: data.latitude,
+          longitude: data.longitude,
+          status: data.status || 'OFFLINE',
+          lastUpdated: data.last_updated || data.updated_at,
+          battery: data.battery_level,
+          gpsQuality: data.gps_quality
+        };
+      } else if (deviceId && data.group_id === currentFleetId) {
+        // ✅ New device joined this fleet - add to list
+        fleetMembers.push({
+          userId: null,
+          deviceId: deviceId,
+          displayName: deviceId,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          status: data.status || 'OFFLINE',
+          lastUpdated: data.last_updated,
+          battery: data.battery_level,
+          gpsQuality: data.gps_quality
+        });
+      }
+
+      // Update active SOS list
+      activeSOSList = fleetMembers.filter(m => m.status === 'SOS');
+
+      updateMembersList();
+      updateSOSList();
+      updateMapMarkers();
+
+      // If currently viewing this member, update the main display
+      if (selectedSOSDeviceId === deviceId || DEVICE_ID === deviceId) {
+        updatePosition(data);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // UI UPDATE FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    function updateMembersList() {
+      const container = document.getElementById('member-list');
+      if (!container) return;
+
+      if (fleetMembers.length === 0) {
+        container.innerHTML = '<div class="no-sos-message">NO MEMBERS IN FLEET</div>';
+        return;
+      }
+
+      container.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      // Sort: SOS first, then ACTIVE, then OFFLINE
+      const sorted = [...fleetMembers].sort((a, b) => {
+        const priority = { SOS: 0, ACTIVE: 1, OFFLINE: 2 };
+        return (priority[a.status] || 3) - (priority[b.status] || 3);
+      });
+
+      sorted.forEach(member => {
+        const row = document.createElement('div');
+        row.className = `member-row ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
+        row.onclick = () => focusOnMember(member);
+
+        const dot = document.createElement('div');
+        dot.className = `member-row-dot ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
+
+        const name = document.createElement('span');
+        name.className = 'member-row-name';
+        name.textContent = member.displayName || member.deviceId?.substring(0, 8) || 'Unknown';
+
+        const status = document.createElement('span');
+        status.className = `member-row-status ${member.status === 'SOS' ? 'sos' : ''}`;
+        status.textContent = member.status || 'UNKNOWN';
+
+        row.appendChild(dot);
+        row.appendChild(name);
+        row.appendChild(status);
+        frag.appendChild(row);
+      });
+
+      container.appendChild(frag);
+    }
+
+    function updateSOSList() {
+      const container = document.getElementById('sos-list');
+      if (!container) return;
+
+      if (activeSOSList.length === 0) {
+        container.innerHTML = '<div class="no-sos-message">NO ACTIVE SOS IN THIS FLEET</div>';
+        return;
+      }
+
+      container.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      activeSOSList.forEach(member => {
+        const card = document.createElement('div');
+        card.className = `sos-card ${selectedSOSDeviceId === member.deviceId ? 'active' : ''}`;
+        card.onclick = () => selectSOSMember(member.deviceId);
+
+        const icon = document.createElement('div');
+        icon.className = 'sos-card-icon';
+        icon.textContent = 'SOS';
+
+        const info = document.createElement('div');
+        info.className = 'sos-card-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'sos-card-name';
+        nameEl.textContent = member.displayName || member.deviceId?.substring(0, 8) || 'Unknown';
+
+        const meta = document.createElement('div');
+        meta.className = 'sos-card-meta';
+        const age = member.lastUpdated ? formatAge(Date.now() - Date.parse(member.lastUpdated)) : 'UNKNOWN';
+        meta.textContent = `ACTIVE • ${age}`;
+
+        info.appendChild(nameEl);
+        info.appendChild(meta);
+
+        card.appendChild(icon);
+        card.appendChild(info);
+        frag.appendChild(card);
+      });
+
+      container.appendChild(frag);
+    }
+
+    function updateMapMarkers() {
+      if (!map) return;
+
+      fleetMembers.forEach(member => {
+        if (!member.latitude || !member.longitude) return;
+
+        const lat = Number(member.latitude);
+        const lng = Number(member.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+        const existingMarker = memberMarkers[member.deviceId];
+
+        if (existingMarker) {
+          // Update existing marker position
+          existingMarker.setLngLat([lng, lat]);
+          // Update marker styling
+          const el = existingMarker.getElement();
+          if (el) {
+            const icon = el.querySelector('.marker-icon');
+            const ring = el.querySelector('.pulse-ring');
+            if (icon) {
+              icon.className = `marker-icon ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
+              icon.textContent = member.status === 'SOS' ? 'SOS' : (member.displayName?.substring(0, 2)?.toUpperCase() || '??');
+            }
+            if (ring) {
+              ring.className = `pulse-ring ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
+            }
+          }
+        } else {
+          // Create new marker
+          const el = document.createElement('div');
+          el.className = 'member-marker';
+          el.innerHTML = `
+            <div class="pulse-ring ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}"></div>
+            <div class="marker-icon ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}">${
+              member.status === 'SOS' ? 'SOS' : (member.displayName?.substring(0, 2)?.toUpperCase() || '??')
+            }</div>
+          `;
+
+          el.onclick = () => focusOnMember(member);
+
+          const newMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([lng, lat])
+            .addTo(map);
+
+          memberMarkers[member.deviceId] = newMarker;
+        }
+      });
+    }
+
+    function focusOnMember(member) {
+      if (!member.latitude || !member.longitude || !map) return;
+
+      const lat = Number(member.latitude);
+      const lng = Number(member.longitude);
+
+      map.easeTo({
+        center: [lng, lat],
+        zoom: 17,
+        pitch: 60,
+        bearing: -15,
+        duration: 800
+      });
+
+      if (member.status === 'SOS') {
+        selectSOSMember(member.deviceId);
+      }
+    }
+
+    async function selectSOSMember(deviceId) {
+      if (!deviceId) return;
+
+      selectedSOSDeviceId = deviceId;
+      DEVICE_ID = deviceId; // Update global device ID for video
+
+      // Update SOS list UI
+      updateSOSList();
+
+      // Reconnect video to new SOS
+      await safeLeaveAgora();
+      camTracks.front = null;
+      remoteAudioTrack = null;
+      showOverlay(true, 'CONNECTING TO SOS FEED...');
+      await startVideo();
+
+      // Focus map on this member
+      const member = fleetMembers.find(m => m.deviceId === deviceId);
+      if (member) focusOnMember(member);
+
+      // Trigger police scan for new location
+      if (member && member.latitude && member.longitude) {
+        setTimeout(() => scanForPolice(member.latitude, member.longitude), 500);
+      }
+    }
 
     function setTopStatus(text) {
       const el = document.getElementById('hud-top-status');
@@ -992,14 +1991,29 @@
 
     initMap();
 
-    // ----------------------------
-    // REALTIME TRACKING
-    // ----------------------------
-    if (DEVICE_ID) {
-      try {
-        const trackingChannel = db.channel(`tracking:${DEVICE_ID}`);
+    // ═══════════════════════════════════════════════════════════════
+    // APP INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
+    async function initApp() {
+      // Check for existing session
+      const hasSession = await checkExistingSession();
 
-        trackingChannel
+      if (!hasSession) {
+        // Show login overlay
+        document.getElementById('login-overlay').classList.remove('hidden');
+      }
+
+      // If URL has device ID (direct link), still set up tracking for it
+      if (DEVICE_ID) {
+        setupDirectDeviceTracking();
+      }
+    }
+
+    function setupDirectDeviceTracking() {
+      try {
+        const directChannel = db.channel(`tracking:${DEVICE_ID}`);
+
+        directChannel
           .on('postgres_changes',
             { event: '*', schema: 'public', table: 'tracking_sessions', filter: `device_id=eq.${DEVICE_ID}` },
             (payload) => {
@@ -1011,10 +2025,17 @@
 
         fetchLastPosition();
       } catch (e) {}
-    } else {
-      setTopStatus('NO DEVICE ID');
-      showOverlay(true, "ERROR: NO DEVICE ID");
     }
+
+    // Old direct tracking (now handled in initApp)
+    if (DEVICE_ID && !currentUser) {
+      // Direct link mode - skip login requirement
+      document.getElementById('login-overlay').classList.add('hidden');
+      setupDirectDeviceTracking();
+    }
+
+    // Initialize app
+    initApp();
 
     async function fetchLastPosition() {
       try {
@@ -1458,10 +2479,12 @@
           }
 
           if (mediaType === "audio") {
-            if (!remoteAudioTrack) {
-              remoteAudioTrack = user.audioTrack;
-              try { user.audioTrack.play(); } catch {}
+            remoteAudioTrack = user.audioTrack;
+            // Only play if user has already clicked unmute (browser autoplay policy)
+            if (audioUnmuted) {
+              try { remoteAudioTrack.play(); } catch {}
             }
+            updateAudioButton();
           }
         } catch (e) {}
       });
@@ -1477,6 +2500,7 @@
 
         if (mediaType === 'audio') {
           remoteAudioTrack = null;
+          updateAudioButton();
         }
 
         if (!camTracks.front) { // Check only for front
@@ -1491,6 +2515,11 @@
     }
 
     async function startVideo() {
+      if (!DEVICE_ID) {
+        showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
+        return;
+      }
+
       try {
         await createAndJoinAgora();
       } catch (e) {
@@ -1507,6 +2536,10 @@
 
     function scheduleRejoin() {
       if (rejoinInFlight) return;
+      if (!DEVICE_ID) {
+        showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
+        return;
+      }
 
       rejoinAttempt = Math.min(rejoinAttempt + 1, 6);
       const delay = Math.min(1500 * rejoinAttempt, 9000);
@@ -1568,13 +2601,53 @@
       }, 1000);
     }
 
-    startVideo();
+    // Only start video if we have a device ID from URL
+    if (DEVICE_ID) {
+      startVideo();
+    } else {
+      showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
+    }
 
     // No camera selection needed, always front
 
     function toggleSheet() {
       document.getElementById('sidebar').classList.toggle('open');
       setTimeout(() => { try { map && map.resize(); } catch(e) {} }, 250);
+    }
+
+    function toggleAudio() {
+      audioUnmuted = !audioUnmuted;
+
+      if (audioUnmuted && remoteAudioTrack) {
+        try {
+          remoteAudioTrack.play();
+        } catch (e) {
+          console.log("Audio play failed:", e);
+        }
+      } else if (!audioUnmuted && remoteAudioTrack) {
+        try {
+          remoteAudioTrack.stop();
+        } catch {}
+      }
+
+      updateAudioButton();
+    }
+
+    function updateAudioButton() {
+      const btn = document.getElementById('audio-btn');
+      if (!btn) return;
+
+      if (audioUnmuted) {
+        btn.classList.add('unmuted');
+        btn.innerHTML = remoteAudioTrack
+          ? '🔊 AUDIO ENABLED'
+          : '🔊 AUDIO ENABLED (WAITING FOR STREAM)';
+      } else {
+        btn.classList.remove('unmuted');
+        btn.innerHTML = remoteAudioTrack
+          ? '🔇 TAP TO ENABLE AUDIO'
+          : '🔇 TAP TO ENABLE AUDIO (NO STREAM YET)';
+      }
     }
 
     async function fetchLocationName(lat, lng) {

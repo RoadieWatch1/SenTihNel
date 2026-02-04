@@ -40,6 +40,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { getDeviceId } from "../../src/services/Identity";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
@@ -51,12 +52,31 @@ const STORAGE_KEY_INVITE_CODE = "sentinel_invite_code";
 const RPC_JOIN_GROUP = "join_group_with_invite_code";
 const RPC_GET_GROUP_ID = "get_group_id_by_invite_code";
 const RPC_REMOVE_DEVICE = "remove_device_from_fleet";
+const RPC_HAS_SOS_PIN = "has_user_sos_pin";
+const RPC_SET_SOS_PIN = "set_user_sos_pin";
+
+// Simple hash function for PIN (consistent across app)
+const hashPin = (pin) => {
+  // Simple hash - in production you might use a proper crypto library
+  let hash = 0;
+  const str = String(pin || "");
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return `pin_${Math.abs(hash).toString(16).padStart(8, '0')}`;
+};
 
 // ✅ Your guardian dashboard base URL (existing public dashboard)
 const GUARDIAN_DASHBOARD_URL = "https://sentihnel.com/";
 
-// Local UI rule: if a device hasn’t updated recently, show it as OFFLINE
+// Local UI rule: if a device hasn't updated recently, show it as OFFLINE
 const OFFLINE_AFTER_MS = 3 * 60 * 1000; // 3 minutes
+
+// ✅ Battery warning thresholds
+const BATTERY_LOW_THRESHOLD = 20;      // Yellow warning
+const BATTERY_CRITICAL_THRESHOLD = 10; // Red warning
 
 // ✅ match Phase 2 SQL normalization (strip non-alphanumeric)
 function normalizeInviteCode(code) {
@@ -91,18 +111,18 @@ function extractGroupIdFromRpc(data) {
 
 export default function FleetScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
 
-  // ✅ Stealth back/menu: return to main screen where you came from
-  // (terminate session + open fleet manager lives on /(app)/home in your app)
+  // ✅ Stealth back/menu: opens the drawer menu (Access page)
   const goBackToMenu = useCallback(() => {
     try {
-      router.replace("/(app)/home");
+      navigation.dispatch(DrawerActions.openDrawer());
     } catch (e) {
       try {
-        router.back();
+        router.replace("/(app)/home");
       } catch {}
     }
-  }, [router]);
+  }, [navigation, router]);
 
   const [workers, setWorkers] = useState([]);
   const [nameByDevice, setNameByDevice] = useState({}); // device_id -> display_name
@@ -115,12 +135,24 @@ export default function FleetScreen() {
   const [inviteCode, setInviteCode] = useState("");
   const [inviteLoading, setInviteLoading] = useState(true);
 
+  // ✅ Fleet Tabs - Work/Family toggle
+  const [activeTab, setActiveTab] = useState("family"); // "work" or "family"
+  const [ownedFleets, setOwnedFleets] = useState({
+    work: { groupId: null, inviteCode: null },
+    family: { groupId: null, inviteCode: null },
+  });
+  const [fleetsLoading, setFleetsLoading] = useState(true);
+
   // Optional: show a quick banner when an SOS broadcast hits
   const [incomingSos, setIncomingSos] = useState(null);
+
+  // ✅ Check-in notifications
+  const [recentCheckIns, setRecentCheckIns] = useState([]);
 
   // ✅ Switch Fleet modal
   const [switchModalVisible, setSwitchModalVisible] = useState(false);
   const [switchInviteInput, setSwitchInviteInput] = useState("");
+  const [switchFleetType, setSwitchFleetType] = useState("family"); // "family" or "work"
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState("");
 
@@ -128,6 +160,19 @@ export default function FleetScreen() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [removingDeviceId, setRemovingDeviceId] = useState(null);
+
+  // ✅ SOS PIN setup
+  const [hasPin, setHasPin] = useState(null); // null = loading, true/false = known
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [pinStep, setPinStep] = useState(1); // 1 = enter, 2 = confirm
+  const [pinInput, setPinInput] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinSaving, setPinSaving] = useState(false);
+
+  // ✅ Collapsible panel states (default collapsed to not block fleet members list)
+  const [inviteCodeExpanded, setInviteCodeExpanded] = useState(false);
+  const [pinSectionExpanded, setPinSectionExpanded] = useState(false);
 
   // Throttle realtime refreshes
   const refetchTimerRef = useRef(null);
@@ -139,6 +184,8 @@ export default function FleetScreen() {
   const isMountedRef = useRef(true);
   const fetchingRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
+  const initialBootDoneRef = useRef(false); // ✅ Prevent boot from running multiple times
+  const activeGroupIdRef = useRef(null); // ✅ Track active group to prevent stale subscription data
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -155,6 +202,28 @@ export default function FleetScreen() {
       return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     } catch {
       return "—";
+    }
+  };
+
+  // ✅ Relative time helper (e.g., "2 min ago")
+  const getRelativeTime = (iso) => {
+    try {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+
+      const now = Date.now();
+      const diff = now - d.getTime();
+
+      if (diff < 0) return "just now";
+      if (diff < 60000) return "just now";
+      if (diff < 120000) return "1 min ago";
+      if (diff < 3600000) return `${Math.floor(diff / 60000)} min ago`;
+      if (diff < 7200000) return "1 hr ago";
+      if (diff < 86400000) return `${Math.floor(diff / 3600000)} hrs ago`;
+      return `${Math.floor(diff / 86400000)} days ago`;
+    } catch {
+      return null;
     }
   };
 
@@ -200,6 +269,30 @@ export default function FleetScreen() {
     return raw === "ACTIVE" ? "ACTIVE" : raw;
   };
 
+  // ✅ Battery status helper
+  const computeBatteryStatus = (batteryLevel) => {
+    const level = typeof batteryLevel === "number" ? batteryLevel : parseInt(batteryLevel, 10);
+    if (Number.isNaN(level) || level < 0) return "unknown";
+    if (level <= BATTERY_CRITICAL_THRESHOLD) return "critical";
+    if (level <= BATTERY_LOW_THRESHOLD) return "low";
+    return "ok";
+  };
+
+  const getBatteryIcon = (batteryStatus, level) => {
+    if (batteryStatus === "critical") return "battery-dead";
+    if (batteryStatus === "low") return "battery-half";
+    if (level >= 80) return "battery-full";
+    if (level >= 50) return "battery-half";
+    return "battery-half";
+  };
+
+  const getBatteryColor = (batteryStatus, isSOS) => {
+    if (isSOS) return "#fecaca";
+    if (batteryStatus === "critical") return "#ef4444";
+    if (batteryStatus === "low") return "#fbbf24";
+    return "#94a3b8";
+  };
+
   const fetchInviteCodeForGroup = useCallback(async (gid) => {
     try {
       if (!gid) return null;
@@ -231,6 +324,7 @@ export default function FleetScreen() {
       const cachedCode = await AsyncStorage.getItem(STORAGE_KEY_INVITE_CODE);
 
       const gidStr = gid ? String(gid) : null;
+      if (gidStr) activeGroupIdRef.current = gidStr; // ✅ Track active group
       if (isMountedRef.current) setGroupId(gidStr);
 
       if (cachedCode) {
@@ -252,7 +346,89 @@ export default function FleetScreen() {
     }
   }, [fetchInviteCodeForGroup]);
 
-  // ✅ After login, don’t trust cached group_id.
+  // ✅ Ensure user has both Work and Family fleets (auto-create on first load)
+  const ensureUserFleets = useCallback(async () => {
+    try {
+      setFleetsLoading(true);
+
+      const { data, error } = await supabase.rpc("ensure_user_fleets");
+
+      if (error) {
+        console.log("ensure_user_fleets error:", error.message);
+        // Fall back to loading from context if RPC doesn't exist yet
+        return null;
+      }
+
+      if (data?.success) {
+        const workFleet = data.work_fleet || {};
+        const familyFleet = data.family_fleet || {};
+
+        const newOwnedFleets = {
+          work: {
+            groupId: workFleet.group_id || null,
+            inviteCode: workFleet.invite_code || null,
+          },
+          family: {
+            groupId: familyFleet.group_id || null,
+            inviteCode: familyFleet.invite_code || null,
+          },
+        };
+
+        if (isMountedRef.current) {
+          setOwnedFleets(newOwnedFleets);
+        }
+
+        console.log("✅ User fleets ensured:", {
+          work: workFleet.group_id?.slice(0, 8),
+          family: familyFleet.group_id?.slice(0, 8),
+        });
+
+        return newOwnedFleets;
+      }
+
+      return null;
+    } catch (e) {
+      console.log("ensureUserFleets error:", e?.message || e);
+      return null;
+    } finally {
+      if (isMountedRef.current) setFleetsLoading(false);
+    }
+  }, []);
+
+  // ✅ Handle tab switch between user's OWN fleets (Work/Family)
+  // NOTE: Switching tabs only VIEWS the fleet - device stays in its current tracking fleet
+  // Device only moves when user explicitly joins a fleet via invite code
+  const handleTabSwitch = useCallback(async (tab) => {
+    if (tab === activeTab) return;
+
+    const fleet = ownedFleets[tab];
+    if (!fleet?.groupId) {
+      console.log("Tab switch: No fleet found for tab", tab);
+      return;
+    }
+
+    // ✅ Set active group ref FIRST to prevent stale subscription callbacks
+    activeGroupIdRef.current = fleet.groupId;
+
+    // Update tab state (VIEW only - don't change tracking fleet)
+    setActiveTab(tab);
+
+    // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
+    if (isMountedRef.current) {
+      setGroupId(fleet.groupId);
+      setInviteCode(fleet.inviteCode || "");
+      setInviteLoading(false);
+      setWorkers([]);
+      setNameByDevice({});
+    }
+
+    // Fetch members for this fleet (view only)
+    await fetchFleet(fleet.groupId);
+
+    console.log("✅ Viewing", tab, "fleet:", fleet.groupId?.slice(0, 8));
+  }, [activeTab, ownedFleets, fetchFleet]);
+
+  // ✅ After login, don't trust cached group_id.
   const reconcileGroupFromDeviceRow = useCallback(async () => {
     try {
       const deviceId = await getDeviceId();
@@ -281,6 +457,7 @@ export default function FleetScreen() {
         await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gid);
         await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
 
+        activeGroupIdRef.current = gid; // ✅ Track active group
         if (isMountedRef.current) {
           setGroupId(gid);
           setInviteCode("");
@@ -406,6 +583,123 @@ export default function FleetScreen() {
     // refresh admin status whenever fleet changes
     resolveIsAdmin(groupId);
   }, [groupId, resolveIsAdmin]);
+
+  // ✅ Check if user has SOS PIN set
+  const checkHasPin = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc(RPC_HAS_SOS_PIN);
+      if (error) {
+        console.log("checkHasPin warning:", error.message);
+        if (isMountedRef.current) setHasPin(false);
+        return;
+      }
+      const result = data?.has_pin === true;
+      if (isMountedRef.current) setHasPin(result);
+    } catch (e) {
+      console.log("checkHasPin error:", e?.message || e);
+      if (isMountedRef.current) setHasPin(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkHasPin();
+  }, [checkHasPin]);
+
+  // ✅ PIN modal handlers
+  const openPinModal = () => {
+    setPinStep(1);
+    setPinInput("");
+    setPinConfirm("");
+    setPinError("");
+    setPinModalVisible(true);
+  };
+
+  const closePinModal = () => {
+    if (pinSaving) return;
+    setPinModalVisible(false);
+    setPinError("");
+  };
+
+  const handlePinDigit = (digit) => {
+    if (pinSaving) return;
+    if (pinStep === 1) {
+      if (pinInput.length < 4) {
+        setPinInput((prev) => prev + digit);
+        setPinError("");
+      }
+    } else {
+      if (pinConfirm.length < 4) {
+        setPinConfirm((prev) => prev + digit);
+        setPinError("");
+      }
+    }
+  };
+
+  const handlePinBackspace = () => {
+    if (pinSaving) return;
+    if (pinStep === 1) {
+      setPinInput((prev) => prev.slice(0, -1));
+    } else {
+      setPinConfirm((prev) => prev.slice(0, -1));
+    }
+    setPinError("");
+  };
+
+  const handlePinNext = async () => {
+    if (pinSaving) return;
+
+    if (pinStep === 1) {
+      if (pinInput.length !== 4) {
+        setPinError("Enter a 4-digit PIN");
+        return;
+      }
+      setPinStep(2);
+      setPinError("");
+      return;
+    }
+
+    // Step 2: Confirm
+    if (pinConfirm.length !== 4) {
+      setPinError("Confirm your 4-digit PIN");
+      return;
+    }
+
+    if (pinInput !== pinConfirm) {
+      setPinError("PINs do not match. Try again.");
+      setPinStep(1);
+      setPinInput("");
+      setPinConfirm("");
+      return;
+    }
+
+    // Save PIN
+    setPinSaving(true);
+    setPinError("");
+
+    try {
+      const hashed = hashPin(pinInput);
+      const { data, error } = await supabase.rpc(RPC_SET_SOS_PIN, { p_pin_hash: hashed });
+
+      if (error) throw error;
+
+      if (data?.success === false) {
+        throw new Error(data?.error || "Could not save PIN");
+      }
+
+      if (isMountedRef.current) {
+        setHasPin(true);
+        setPinModalVisible(false);
+      }
+
+      Alert.alert("PIN Set", "Your SOS PIN has been saved. Remember it - this PIN cannot be changed.");
+    } catch (e) {
+      const msg = e?.message || "Could not save PIN";
+      console.log("save PIN error:", msg);
+      setPinError(msg);
+    } finally {
+      setPinSaving(false);
+    }
+  };
 
   const shareInviteCode = async () => {
     try {
@@ -553,11 +847,17 @@ export default function FleetScreen() {
 
         const { data, error } = await supabase
           .from("tracking_sessions")
-          .select("device_id, group_id, latitude, longitude, battery_level, status, last_updated")
+          .select("device_id, group_id, latitude, longitude, battery_level, status, last_updated, gps_quality, gps_accuracy_m, speed, heading")
           .eq("group_id", gid)
           .order("last_updated", { ascending: false });
 
         if (error) throw error;
+
+        // ✅ Check if this fetch is still relevant (prevents stale data from old subscription)
+        if (activeGroupIdRef.current && gid !== activeGroupIdRef.current) {
+          console.log("🟡 Ignoring stale fleet fetch:", gid?.slice(0, 8), "active:", activeGroupIdRef.current?.slice(0, 8));
+          return;
+        }
 
         const rows = Array.isArray(data) ? data : [];
         const deduped = dedupeLatestByDevice(rows);
@@ -623,6 +923,22 @@ export default function FleetScreen() {
     [sortedWorkers]
   );
 
+  // ✅ Battery warnings summary
+  const lowBatteryMembers = useMemo(() => {
+    return sortedWorkers.filter((w) => {
+      const status = computeDisplayStatus(w);
+      if (status === "OFFLINE") return false; // Don't warn about offline devices
+      const batteryStatus = computeBatteryStatus(w?.battery_level);
+      return batteryStatus === "low" || batteryStatus === "critical";
+    });
+  }, [sortedWorkers]);
+
+  const hasLowBattery = lowBatteryMembers.length > 0;
+
+  const criticalBatteryCount = useMemo(() => {
+    return lowBatteryMembers.filter((w) => computeBatteryStatus(w?.battery_level) === "critical").length;
+  }, [lowBatteryMembers]);
+
   const openSosLiveView = async (list) => {
     const source = Array.isArray(list) ? list : sortedWorkers;
     const sos = source.find((w) => computeDisplayStatus(w) === "SOS");
@@ -635,16 +951,54 @@ export default function FleetScreen() {
 
   const boot = useCallback(async () => {
     if (!isMountedRef.current) return;
+
+    // ✅ Prevent boot from running multiple times (causes re-render loops)
+    if (initialBootDoneRef.current) {
+      console.log("Boot already done, skipping");
+      return;
+    }
+    initialBootDoneRef.current = true;
+
     setLoading(true);
 
-    const cachedGid = await loadFleetContext();
-    const reconciledGid = await reconcileGroupFromDeviceRow();
-    const gidToUse = reconciledGid || cachedGid;
+    // ✅ First, ensure user has both Work and Family fleets
+    const fleets = await ensureUserFleets();
+
+    // Default to Family fleet on initial load (user can switch via tabs)
+    let gidToUse = null;
+    let codeToUse = null;
+
+    if (fleets) {
+      // Default to family fleet on boot
+      const defaultFleet = fleets.family || fleets.work;
+      if (defaultFleet?.groupId) {
+        gidToUse = defaultFleet.groupId;
+        codeToUse = defaultFleet.inviteCode;
+        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse);
+        if (codeToUse) {
+          await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, codeToUse);
+        }
+        activeGroupIdRef.current = gidToUse; // ✅ Track active group
+        if (isMountedRef.current) {
+          setGroupId(gidToUse);
+          setInviteCode(codeToUse || "");
+          setInviteLoading(false);
+        }
+      }
+    }
+
+    // Fall back to cached context if ensure_user_fleets didn't work
+    if (!gidToUse) {
+      const cachedGid = await loadFleetContext();
+      const reconciledGid = await reconcileGroupFromDeviceRow();
+      gidToUse = reconciledGid || cachedGid;
+      if (gidToUse) activeGroupIdRef.current = gidToUse; // ✅ Track active group
+    }
 
     await fetchFleet(gidToUse);
 
     if (isMountedRef.current) setLoading(false);
-  }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow]);
+  }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow, ensureUserFleets]);
 
   useEffect(() => {
     boot();
@@ -656,6 +1010,7 @@ export default function FleetScreen() {
         try {
           await AsyncStorage.multiRemove([STORAGE_KEY_GROUP_ID, STORAGE_KEY_INVITE_CODE]);
         } catch {}
+        activeGroupIdRef.current = null; // ✅ Clear active group tracking
         if (isMountedRef.current) {
           setGroupId(null);
           setInviteCode("");
@@ -663,11 +1018,17 @@ export default function FleetScreen() {
           setNameByDevice({});
           setErrorText("");
           setIsAdmin(false);
+          setOwnedFleets({ work: { groupId: null, inviteCode: null }, family: { groupId: null, inviteCode: null } });
+          setActiveTab("family");
         }
+        // ✅ Reset boot flag so boot can run again after sign-in
+        initialBootDoneRef.current = false;
         return;
       }
 
       if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        // ✅ Reset boot flag to allow fresh boot on sign-in
+        initialBootDoneRef.current = false;
         boot();
       }
     });
@@ -717,10 +1078,18 @@ export default function FleetScreen() {
           filter: `group_id=eq.${groupId}`,
         },
         () => {
+          // ✅ Check if this subscription is still for the active group
+          if (activeGroupIdRef.current && groupId !== activeGroupIdRef.current) {
+            console.log("🟡 Ignoring stale subscription event:", groupId?.slice(0, 8));
+            return;
+          }
+
           if (refetchTimerRef.current) return;
 
           refetchTimerRef.current = setTimeout(() => {
             refetchTimerRef.current = null;
+            // Double-check still active before fetching
+            if (activeGroupIdRef.current && groupId !== activeGroupIdRef.current) return;
             fetchFleet(groupId);
           }, 800);
         }
@@ -756,6 +1125,12 @@ export default function FleetScreen() {
     const ch = supabase
       .channel(`fleet:${groupId}`)
       .on("broadcast", { event: "sos" }, (payload) => {
+        // ✅ Check if this broadcast is still for the active group
+        if (activeGroupIdRef.current && groupId !== activeGroupIdRef.current) {
+          console.log("🟡 Ignoring stale SOS broadcast:", groupId?.slice(0, 8));
+          return;
+        }
+
         const p = payload?.payload || payload;
         const device_id = p?.device_id || p?.deviceId || "Unknown";
         console.log("🚨 SOS broadcast received:", device_id);
@@ -778,6 +1153,35 @@ export default function FleetScreen() {
           });
         }, 12500);
       })
+      .on("broadcast", { event: "check_in" }, (payload) => {
+        // ✅ Check-in broadcast received
+        const p = payload?.payload || payload;
+        const device_id = p?.device_id || p?.deviceId || "Unknown";
+        const display_name = p?.display_name || null;
+        console.log("✅ Check-in broadcast received:", device_id);
+
+        if (isMountedRef.current) {
+          setRecentCheckIns((prev) => {
+            // Keep only last 5 check-ins from last 30 seconds
+            const now = Date.now();
+            const filtered = prev.filter((c) => now - c.ts < 30000).slice(-4);
+            return [...filtered, {
+              device_id: String(device_id),
+              display_name,
+              ts: now,
+            }];
+          });
+        }
+
+        // Auto-clear after 8 seconds
+        setTimeout(() => {
+          if (!isMountedRef.current) return;
+          setRecentCheckIns((prev) => {
+            const now = Date.now();
+            return prev.filter((c) => now - c.ts < 8000);
+          });
+        }, 8500);
+      })
       .subscribe();
 
     broadcastChannelRef.current = ch;
@@ -798,6 +1202,7 @@ export default function FleetScreen() {
   const openSwitchModal = () => {
     setSwitchError("");
     setSwitchInviteInput("");
+    setSwitchFleetType(activeTab); // ✅ Match current tab (work or family)
     setSwitchModalVisible(true);
   };
 
@@ -827,12 +1232,38 @@ export default function FleetScreen() {
         return;
       }
 
-      // 2) Join fleet via RPC (no direct writes)
-      const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, { p_invite_code: clean });
-      if (joinErr) throw joinErr;
+      // ✅ Check if user already OWNS this fleet (skip subscription check)
+      const isOwnedWorkFleet = ownedFleets.work?.groupId === targetGroupId;
+      const isOwnedFamilyFleet = ownedFleets.family?.groupId === targetGroupId;
+      const isOwnedFleet = isOwnedWorkFleet || isOwnedFamilyFleet;
 
-      const extracted = extractGroupIdFromRpc(joinData);
-      const newGroupId = String(extracted || targetGroupId);
+      let newGroupId = targetGroupId;
+
+      if (isOwnedFleet) {
+        // User owns this fleet - no need to join, just switch tracking to it
+        console.log("✅ Switching to owned fleet:", targetGroupId?.slice(0, 8));
+        // Also switch to the correct tab
+        if (isOwnedWorkFleet && activeTab !== "work") {
+          setActiveTab("work");
+        } else if (isOwnedFamilyFleet && activeTab !== "family") {
+          setActiveTab("family");
+        }
+      } else {
+        // 2) Join fleet via RPC (requires subscription for external fleets)
+        const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, {
+          p_invite_code: clean,
+          p_fleet_type: switchFleetType,
+        });
+        if (joinErr) throw joinErr;
+
+        // ✅ Check RPC response for success (RPC returns {success: false} as data, not error)
+        if (joinData?.success === false) {
+          throw new Error(joinData?.error || "Could not join fleet");
+        }
+
+        const extracted = extractGroupIdFromRpc(joinData);
+        newGroupId = String(extracted || targetGroupId);
+      }
 
       if (!newGroupId || newGroupId.includes("[object")) {
         throw new Error("Join returned, but no valid group_id was produced.");
@@ -848,6 +1279,7 @@ export default function FleetScreen() {
       await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, newGroupId);
       await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
 
+      activeGroupIdRef.current = newGroupId; // ✅ Track active group
       if (isMountedRef.current) {
         setGroupId(newGroupId);
         setInviteCode("");
@@ -1030,8 +1462,47 @@ export default function FleetScreen() {
 
     const isRemovingThis = removingDeviceId && String(removingDeviceId) === String(item?.device_id);
 
+    // ✅ Battery status
+    const batteryStatus = computeBatteryStatus(item?.battery_level);
+    const batteryLevel = typeof item?.battery_level === "number" ? item.battery_level : parseInt(item?.battery_level, 10);
+    const batteryIcon = getBatteryIcon(batteryStatus, batteryLevel);
+    const batteryColor = getBatteryColor(batteryStatus, isSOS);
+    const isBatteryWarning = batteryStatus === "low" || batteryStatus === "critical";
+
+    // ✅ Enhanced card data
+    const relativeTime = getRelativeTime(item?.last_updated);
+    const gpsQuality = item?.gps_quality ? String(item.gps_quality).toUpperCase() : null;
+    const gpsAccuracy = typeof item?.gps_accuracy_m === "number" ? Math.round(item.gps_accuracy_m) : null;
+    const speed = typeof item?.speed === "number" && item.speed >= 0 ? item.speed : null;
+    const speedMph = speed !== null ? Math.round(speed * 2.237) : null; // m/s to mph
+
     return (
-      <View style={[styles.card, isSOS && styles.cardSOS, isOnline && !isSOS && styles.cardActive]}>
+      <View style={[
+        styles.card,
+        isSOS && styles.cardSOS,
+        isOnline && !isSOS && styles.cardActive,
+        !isSOS && isBatteryWarning && batteryStatus === "critical" && styles.cardBatteryCritical,
+      ]}>
+        {/* ✅ Battery Warning Badge */}
+        {isOnline && isBatteryWarning && !isSOS && (
+          <View style={[
+            styles.batteryWarningBadge,
+            batteryStatus === "critical" && styles.batteryWarningBadgeCritical,
+          ]}>
+            <Ionicons
+              name={batteryStatus === "critical" ? "battery-dead" : "battery-half"}
+              size={12}
+              color={batteryStatus === "critical" ? "#fee2e2" : "#fef3c7"}
+            />
+            <Text style={[
+              styles.batteryWarningBadgeText,
+              batteryStatus === "critical" && styles.batteryWarningBadgeTextCritical,
+            ]}>
+              {batteryStatus === "critical" ? "LOW BATTERY" : "Battery Low"}
+            </Text>
+          </View>
+        )}
+
         {/* Header row is long-pressable for admin options (stealth) */}
         <Pressable onLongPress={() => openMemberMenu(item)} delayLongPress={650}>
           <View style={styles.cardHeader}>
@@ -1047,9 +1518,26 @@ export default function FleetScreen() {
                   {label}
                 </Text>
                 <Text style={[styles.subLabel, isSOS && styles.subLabelSOS]}>
-                  {isSOS ? "🚨 SOS" : isOnline ? "ONLINE" : "OFFLINE"} • Last: {lastSeen}
+                  {isSOS ? "🚨 SOS" : isOnline ? "ONLINE" : "OFFLINE"}
+                  {relativeTime ? ` • ${relativeTime}` : ` • ${lastSeen}`}
                 </Text>
-                <Text style={styles.deviceLine}>Device: {shortId(item?.device_id)}</Text>
+                <View style={styles.deviceLineRow}>
+                  <Text style={styles.deviceLine}>Device: {shortId(item?.device_id)}</Text>
+                  {gpsQuality && isOnline && (
+                    <View style={[
+                      styles.gpsQualityBadge,
+                      gpsQuality === "GOOD" && styles.gpsQualityGood,
+                      gpsQuality === "POOR" && styles.gpsQualityPoor,
+                    ]}>
+                      <Text style={[
+                        styles.gpsQualityText,
+                        gpsQuality === "GOOD" && styles.gpsQualityTextGood,
+                      ]}>
+                        GPS {gpsQuality === "GOOD" ? "✓" : "~"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
               </View>
             </View>
 
@@ -1079,17 +1567,35 @@ export default function FleetScreen() {
         </Pressable>
 
         <View style={styles.statsRow}>
-          <View style={styles.stat}>
-            <Ionicons name="battery-half" size={16} color={isSOS ? "#fecaca" : "#94a3b8"} />
-            <Text style={[styles.statText, isSOS && styles.statTextSOS]}>{safePercent(item?.battery_level)}</Text>
+          <View style={[styles.stat, isBatteryWarning && !isSOS && styles.statWarning]}>
+            <Ionicons name={batteryIcon} size={16} color={batteryColor} />
+            <Text style={[
+              styles.statText,
+              isSOS && styles.statTextSOS,
+              !isSOS && batteryStatus === "critical" && styles.statTextCritical,
+              !isSOS && batteryStatus === "low" && styles.statTextLow,
+            ]}>
+              {safePercent(item?.battery_level)}
+            </Text>
           </View>
 
           <View style={styles.stat}>
             <Ionicons name="location-outline" size={16} color={isSOS ? "#fecaca" : "#94a3b8"} />
-            <Text style={[styles.statText, isSOS && styles.statTextSOS]}>
+            <Text style={[styles.statText, isSOS && styles.statTextSOS]} numberOfLines={1}>
               {safeCoords(item?.latitude, item?.longitude)}
+              {gpsAccuracy && isOnline ? ` (±${gpsAccuracy}m)` : ""}
             </Text>
           </View>
+
+          {/* ✅ Speed indicator (only show if moving) */}
+          {speedMph !== null && speedMph > 0 && isOnline && (
+            <View style={styles.stat}>
+              <Ionicons name="speedometer-outline" size={16} color={isSOS ? "#fecaca" : "#94a3b8"} />
+              <Text style={[styles.statText, isSOS && styles.statTextSOS]}>
+                {speedMph} mph
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.cardActions}>
@@ -1164,6 +1670,26 @@ export default function FleetScreen() {
                 editable={!switching}
               />
 
+              {/* ✅ Fleet Type Indicator (auto-matches current tab) */}
+              <View style={styles.switchFleetTypeContainer}>
+                <View style={styles.switchFleetTypeIndicator}>
+                  <Ionicons
+                    name={switchFleetType === "work" ? "briefcase" : "home"}
+                    size={18}
+                    color={switchFleetType === "work" ? "#3b82f6" : "#22c55e"}
+                  />
+                  <Text style={[
+                    styles.switchFleetTypeIndicatorText,
+                    { color: switchFleetType === "work" ? "#3b82f6" : "#22c55e" }
+                  ]}>
+                    Joining {switchFleetType === "work" ? "Work" : "Family"} Fleet
+                  </Text>
+                </View>
+                <Text style={styles.switchFleetTypeHint}>
+                  This will replace your current {switchFleetType} fleet membership
+                </Text>
+              </View>
+
               {!!switchError && <Text style={styles.modalError}>⚠ {switchError}</Text>}
 
               <View style={styles.modalBtnRow}>
@@ -1197,6 +1723,119 @@ export default function FleetScreen() {
         </Pressable>
       </Modal>
 
+      {/* ✅ SOS PIN Setup Modal */}
+      <Modal transparent visible={pinModalVisible} animationType="fade" onRequestClose={closePinModal}>
+        <Pressable style={styles.modalBackdrop} onPress={closePinModal}>
+          <Pressable style={styles.pinModalCard} onPress={() => {}}>
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalTitleRow}>
+                <Ionicons name="lock-closed" size={18} color="#e2e8f0" />
+                <Text style={styles.modalTitle}>
+                  {pinStep === 1 ? "Create Your SOS PIN" : "Confirm Your PIN"}
+                </Text>
+              </View>
+
+              <TouchableOpacity onPress={closePinModal} disabled={pinSaving} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalHint}>
+              {pinStep === 1
+                ? "This PIN deactivates emergency SOS."
+                : "Enter the same PIN again to confirm."}
+            </Text>
+
+            <Text style={styles.pinWarningModal}>
+              ⚠️ You cannot change this PIN later. Make sure you remember it.
+            </Text>
+
+            {/* PIN Dots Display */}
+            <View style={styles.pinDotsRow}>
+              {[0, 1, 2, 3].map((i) => {
+                const currentPin = pinStep === 1 ? pinInput : pinConfirm;
+                const filled = i < currentPin.length;
+                return (
+                  <View
+                    key={i}
+                    style={[styles.pinDot, filled && styles.pinDotFilled]}
+                  />
+                );
+              })}
+            </View>
+
+            {!!pinError && <Text style={styles.modalError}>⚠ {pinError}</Text>}
+
+            {/* PIN Keypad */}
+            <View style={styles.pinKeypad}>
+              {[[1, 2, 3], [4, 5, 6], [7, 8, 9], ["", 0, "⌫"]].map((row, rowIdx) => (
+                <View key={rowIdx} style={styles.pinKeypadRow}>
+                  {row.map((key, keyIdx) => {
+                    if (key === "") {
+                      return <View key={keyIdx} style={styles.pinKeyEmpty} />;
+                    }
+                    if (key === "⌫") {
+                      return (
+                        <TouchableOpacity
+                          key={keyIdx}
+                          style={styles.pinKey}
+                          onPress={handlePinBackspace}
+                          disabled={pinSaving}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="backspace-outline" size={24} color="#e2e8f0" />
+                        </TouchableOpacity>
+                      );
+                    }
+                    return (
+                      <TouchableOpacity
+                        key={keyIdx}
+                        style={styles.pinKey}
+                        onPress={() => handlePinDigit(String(key))}
+                        disabled={pinSaving}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.pinKeyText}>{key}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+
+            {/* Action Button */}
+            <TouchableOpacity
+              style={[styles.pinActionBtn, pinSaving && { opacity: 0.75 }]}
+              onPress={handlePinNext}
+              disabled={pinSaving}
+              activeOpacity={0.9}
+            >
+              {pinSaving ? (
+                <ActivityIndicator color="#0b1220" />
+              ) : (
+                <Text style={styles.pinActionBtnText}>
+                  {pinStep === 1 ? "NEXT" : "CONFIRM & SAVE"}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {pinStep === 2 && !pinSaving && (
+              <TouchableOpacity
+                style={styles.pinBackBtn}
+                onPress={() => {
+                  setPinStep(1);
+                  setPinConfirm("");
+                  setPinError("");
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.pinBackBtnText}>← Go Back</Text>
+              </TouchableOpacity>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <View style={styles.header}>
         {/* ✅ stealth back/menu + switch controls */}
         <View style={styles.headerTopRow}>
@@ -1209,11 +1848,52 @@ export default function FleetScreen() {
 
           <TouchableOpacity onPress={openSwitchModal} style={styles.switchBtn} activeOpacity={0.8}>
             <Ionicons name="swap-horizontal" size={16} color="#e2e8f0" />
-            <Text style={styles.switchText}>Switch</Text>
+            <Text style={styles.switchText}>Join</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.headerTitle}>Fleet Manager</Text>
+        {/* ✅ Work/Family Tab Switcher */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === "family" && styles.tabActive]}
+            onPress={() => handleTabSwitch("family")}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="home"
+              size={16}
+              color={activeTab === "family" ? "#22c55e" : "#64748b"}
+            />
+            <Text style={[styles.tabText, activeTab === "family" && styles.tabTextActive]}>
+              Family
+            </Text>
+            {ownedFleets.family?.groupId && (
+              <View style={[styles.tabDot, activeTab === "family" && styles.tabDotActive]} />
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tab, activeTab === "work" && styles.tabActiveWork]}
+            onPress={() => handleTabSwitch("work")}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="briefcase"
+              size={16}
+              color={activeTab === "work" ? "#3b82f6" : "#64748b"}
+            />
+            <Text style={[styles.tabText, activeTab === "work" && styles.tabTextActiveWork]}>
+              Work
+            </Text>
+            {ownedFleets.work?.groupId && (
+              <View style={[styles.tabDot, activeTab === "work" && styles.tabDotActiveWork]} />
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.headerTitle}>
+          {activeTab === "work" ? "Work Fleet" : "Family Fleet"}
+        </Text>
         <Text style={styles.headerSub}>
           {sortedWorkers.length} member{sortedWorkers.length === 1 ? "" : "s"} visible
           {!!groupId ? ` • Fleet ${String(groupId).slice(0, 8)}…` : ""}
@@ -1229,25 +1909,88 @@ export default function FleetScreen() {
           </View>
         )}
 
+        {/* ✅ Check-In Notifications */}
+        {recentCheckIns.length > 0 && !incomingSos?.device_id && (
+          <View style={styles.checkInBanner}>
+            <Ionicons name="checkmark-circle" size={16} color="#bbf7d0" />
+            <Text style={styles.checkInBannerText} numberOfLines={1}>
+              {recentCheckIns.length === 1
+                ? `${recentCheckIns[0].display_name || getFriendlyName(recentCheckIns[0].device_id)} checked in ✓`
+                : `${recentCheckIns.length} members checked in ✓`}
+            </Text>
+          </View>
+        )}
+
         {!!groupId ? (
           <View style={styles.fleetInfoCard}>
-            <View style={styles.fleetInfoRow}>
-              <Text style={styles.fleetInfoLabel}>Invite Code</Text>
-              <View style={styles.inviteRow}>
-                <Text style={styles.inviteCode} selectable>
-                  {inviteLoading ? "Loading…" : inviteCode || "—"}
-                </Text>
-
-                <TouchableOpacity
-                  style={[styles.copyBtn, !inviteCode && styles.copyBtnDisabled]}
-                  onPress={shareInviteCode}
-                  disabled={!inviteCode}
-                >
-                  <Ionicons name="share-outline" size={16} color="#0b1220" />
-                </TouchableOpacity>
+            {/* ✅ Collapsible Invite Code Header */}
+            <TouchableOpacity
+              style={styles.collapsibleHeader}
+              onPress={() => setInviteCodeExpanded(!inviteCodeExpanded)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.collapsibleHeaderLeft}>
+                <Ionicons name="people" size={18} color="#94a3b8" />
+                <Text style={styles.collapsibleHeaderText}>Fleet Info & Invite Code</Text>
               </View>
-            </View>
+              <Ionicons
+                name={inviteCodeExpanded ? "chevron-up" : "chevron-down"}
+                size={20}
+                color="#94a3b8"
+              />
+            </TouchableOpacity>
 
+            {/* ✅ Collapsible Content */}
+            {inviteCodeExpanded && (
+              <>
+                <View style={styles.fleetInfoRow}>
+                  <Text style={styles.fleetInfoLabel}>Invite Code</Text>
+                  <View style={styles.inviteRow}>
+                    <Text style={styles.inviteCode} selectable>
+                      {inviteLoading ? "Loading…" : inviteCode || "—"}
+                    </Text>
+
+                    <TouchableOpacity
+                      style={[styles.copyBtn, !inviteCode && styles.copyBtnDisabled]}
+                      onPress={shareInviteCode}
+                      disabled={!inviteCode}
+                    >
+                      <Ionicons name="share-outline" size={16} color="#0b1220" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <Text style={styles.fleetInfoHint}>
+                  Only devices in your fleet appear here (same invite code / group).
+                  {"\n"}Use "LIVE VIEW" when SOS triggers, and "COORDS" to read to police.
+                  {isAdmin ? "\n(Manager: long-press a member card header or tap ⋯ to remove old devices.)" : ""}
+                </Text>
+              </>
+            )}
+
+            {/* ✅ Battery Warning Banner - always visible when relevant */}
+            {hasLowBattery && !hasSOS && (
+              <View style={[
+                styles.batteryBanner,
+                criticalBatteryCount > 0 && styles.batteryBannerCritical,
+              ]}>
+                <Ionicons
+                  name={criticalBatteryCount > 0 ? "battery-dead" : "battery-half"}
+                  size={16}
+                  color={criticalBatteryCount > 0 ? "#fee2e2" : "#fef3c7"}
+                />
+                <Text style={[
+                  styles.batteryBannerText,
+                  criticalBatteryCount > 0 && styles.batteryBannerTextCritical,
+                ]}>
+                  {criticalBatteryCount > 0
+                    ? `${criticalBatteryCount} member${criticalBatteryCount > 1 ? "s" : ""} with critical battery`
+                    : `${lowBatteryMembers.length} member${lowBatteryMembers.length > 1 ? "s" : ""} with low battery`}
+                </Text>
+              </View>
+            )}
+
+            {/* ✅ SOS Panel - always visible when SOS is active */}
             {hasSOS && firstSOS && (
               <View style={styles.sosPanel}>
                 <View style={{ flex: 1 }}>
@@ -1271,16 +2014,69 @@ export default function FleetScreen() {
                 </View>
               </View>
             )}
-
-            <Text style={styles.fleetInfoHint}>
-              Only devices in your fleet appear here (same invite code / group).
-              {"\n"}Use “LIVE VIEW” when SOS triggers, and “COORDS” to read to police.
-              {isAdmin ? "\n(Manager: long-press a member card header or tap ⋯ to remove old devices.)" : ""}
-            </Text>
           </View>
         ) : (
           <Text style={styles.noFleetHint}>No fleet linked yet. Go to Login and use Join Fleet or Create Fleet.</Text>
         )}
+
+        {/* ✅ SOS PIN Setup Section - Collapsible */}
+        <View style={styles.pinSection}>
+          <TouchableOpacity
+            style={styles.collapsibleHeader}
+            onPress={() => setPinSectionExpanded(!pinSectionExpanded)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.collapsibleHeaderLeft}>
+              <Ionicons name="lock-closed" size={18} color="#94a3b8" />
+              <Text style={styles.collapsibleHeaderText}>SOS PIN</Text>
+              {hasPin && (
+                <View style={styles.statusBadgeGreen}>
+                  <Text style={styles.statusBadgeText}>SET</Text>
+                </View>
+              )}
+              {hasPin === false && (
+                <View style={styles.statusBadgeYellow}>
+                  <Text style={styles.statusBadgeTextDark}>NOT SET</Text>
+                </View>
+              )}
+            </View>
+            <Ionicons
+              name={pinSectionExpanded ? "chevron-up" : "chevron-down"}
+              size={20}
+              color="#94a3b8"
+            />
+          </TouchableOpacity>
+
+          {pinSectionExpanded && (
+            <>
+              <Text style={styles.pinDescription}>
+                Use to Deactivate SOS Alert PIN Code
+              </Text>
+
+              {hasPin === null ? (
+                <View style={styles.pinStatusRow}>
+                  <ActivityIndicator size="small" color="#94a3b8" />
+                  <Text style={styles.pinStatusText}>Checking...</Text>
+                </View>
+              ) : hasPin ? (
+                <View style={styles.pinStatusRow}>
+                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                  <Text style={[styles.pinStatusText, { color: "#22c55e" }]}>PIN Configured</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.pinSetupBtn} onPress={openPinModal} activeOpacity={0.85}>
+                  <Ionicons name="key-outline" size={16} color="#0b1220" />
+                  <Text style={styles.pinSetupBtnText}>SET UP PIN</Text>
+                </TouchableOpacity>
+              )}
+
+              <Text style={styles.pinWarning}>
+                ⚠️ IMPORTANT: Remember this PIN. It is the ONLY code that can unlock your phone during an emergency SOS.
+                {hasPin ? "" : " This PIN cannot be changed once set."}
+              </Text>
+            </>
+          )}
+        </View>
 
         {!!errorText && <Text style={styles.errorText}>⚠ {errorText}</Text>}
       </View>
@@ -1355,6 +2151,59 @@ const styles = StyleSheet.create({
   headerSub: { color: "#94a3b8", fontSize: 13, marginTop: 6 },
   errorText: { color: "#fca5a5", marginTop: 10, fontSize: 12 },
 
+  // ✅ Tab Switcher Styles
+  tabContainer: {
+    flexDirection: "row",
+    marginTop: 16,
+    marginBottom: 8,
+    gap: 10,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.16)",
+  },
+  tabActive: {
+    backgroundColor: "rgba(34, 197, 94, 0.12)",
+    borderColor: "rgba(34, 197, 94, 0.35)",
+  },
+  tabActiveWork: {
+    backgroundColor: "rgba(59, 130, 246, 0.12)",
+    borderColor: "rgba(59, 130, 246, 0.35)",
+  },
+  tabText: {
+    color: "#64748b",
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  tabTextActive: {
+    color: "#22c55e",
+  },
+  tabTextActiveWork: {
+    color: "#3b82f6",
+  },
+  tabDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#64748b",
+  },
+  tabDotActive: {
+    backgroundColor: "#22c55e",
+  },
+  tabDotActiveWork: {
+    backgroundColor: "#3b82f6",
+  },
+
   sosBroadcastBanner: {
     marginTop: 12,
     borderRadius: 12,
@@ -1375,10 +2224,31 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  // ✅ Check-In Banner
+  checkInBanner: {
+    marginTop: 12,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(34, 197, 94, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.28)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  checkInBannerText: {
+    color: "#bbf7d0",
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    fontSize: 12,
+    flex: 1,
+  },
+
   fleetInfoCard: {
-    marginTop: 14,
-    padding: 14,
-    borderRadius: 14,
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
     backgroundColor: "#0b1220",
     borderWidth: 1,
     borderColor: "rgba(34, 197, 94, 0.25)",
@@ -1387,9 +2257,57 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  fleetInfoLabel: { color: "#94a3b8", fontSize: 12, fontWeight: "800", letterSpacing: 0.6 },
+  fleetInfoLabel: { color: "#94a3b8", fontSize: 11, fontWeight: "800", letterSpacing: 0.6 },
+
+  // ✅ Collapsible Header Styles (compact when collapsed)
+  collapsibleHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+    marginBottom: 0,
+  },
+  collapsibleHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  collapsibleHeaderText: {
+    color: "#e2e8f0",
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  statusBadgeGreen: {
+    backgroundColor: "rgba(34, 197, 94, 0.20)",
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.4)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusBadgeYellow: {
+    backgroundColor: "rgba(251, 191, 36, 0.20)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.4)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusBadgeText: {
+    color: "#22c55e",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  statusBadgeTextDark: {
+    color: "#fbbf24",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
 
   inviteRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   inviteCode: { color: "#22c55e", fontSize: 18, fontWeight: "900", letterSpacing: 2 },
@@ -1494,7 +2412,34 @@ const styles = StyleSheet.create({
   subLabel: { color: "#64748b", fontSize: 12, marginTop: 2, fontWeight: "700" },
   subLabelSOS: { color: "#fecaca" },
 
-  deviceLine: { color: "#475569", fontSize: 11, marginTop: 4, fontWeight: "700" },
+  deviceLine: { color: "#475569", fontSize: 11, fontWeight: "700" },
+  deviceLineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  gpsQualityBadge: {
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+    backgroundColor: "rgba(148, 163, 184, 0.10)",
+  },
+  gpsQualityGood: {
+    backgroundColor: "rgba(34, 197, 94, 0.15)",
+  },
+  gpsQualityPoor: {
+    backgroundColor: "rgba(251, 191, 36, 0.15)",
+  },
+  gpsQualityText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#94a3b8",
+    letterSpacing: 0.5,
+  },
+  gpsQualityTextGood: {
+    color: "#22c55e",
+  },
 
   dotsBtn: {
     width: 32,
@@ -1611,6 +2556,73 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
   },
   modalError: { color: "#fca5a5", marginTop: 10, fontSize: 12, fontWeight: "800" },
+
+  // ✅ Fleet Type Selector styles (Switch Fleet modal)
+  switchFleetTypeContainer: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(148, 163, 184, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.12)",
+  },
+  switchFleetTypeIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  switchFleetTypeIndicatorText: {
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  switchFleetTypeLabel: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "700",
+    marginBottom: 10,
+    letterSpacing: 0.3,
+  },
+  switchFleetTypeButtons: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  switchFleetTypeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.16)",
+  },
+  switchFleetTypeBtnActive: {
+    backgroundColor: "#22c55e",
+    borderColor: "#22c55e",
+  },
+  switchFleetTypeBtnText: {
+    color: "#94a3b8",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  switchFleetTypeBtnTextActive: {
+    color: "#0b1220",
+  },
+  switchFleetTypeHint: {
+    color: "#64748b",
+    fontSize: 10,
+    marginTop: 10,
+    textAlign: "center",
+    fontWeight: "600",
+    fontStyle: "italic",
+  },
+
   modalBtnRow: { flexDirection: "row", gap: 10, marginTop: 14 },
   modalBtn: {
     flex: 1,
@@ -1629,4 +2641,233 @@ const styles = StyleSheet.create({
   modalBtnGhostText: { color: "#e2e8f0", fontWeight: "900", letterSpacing: 0.6, fontSize: 12 },
   modalBtnPrimary: { backgroundColor: "#22c55e" },
   modalBtnPrimaryText: { color: "#0b1220", fontWeight: "900", letterSpacing: 0.8, fontSize: 12 },
+
+  // =========================
+  // ✅ SOS PIN Section styles
+  // =========================
+  pinSection: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "#0b1220",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.20)",
+  },
+  pinHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 6,
+  },
+  pinTitle: {
+    color: "#e2e8f0",
+    fontSize: 14,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  pinDescription: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+  pinStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  pinStatusText: {
+    color: "#94a3b8",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  pinSetupBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#22c55e",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  pinSetupBtnText: {
+    color: "#0b1220",
+    fontWeight: "900",
+    fontSize: 13,
+    letterSpacing: 0.8,
+  },
+  pinWarning: {
+    color: "#fbbf24",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
+  },
+
+  // =========================
+  // ✅ PIN Modal styles
+  // =========================
+  pinModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    backgroundColor: "#0f172a",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.18)",
+    padding: 16,
+  },
+  pinWarningModal: {
+    color: "#fbbf24",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 8,
+    lineHeight: 15,
+  },
+  pinDotsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 16,
+    marginVertical: 20,
+  },
+  pinDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#64748b",
+    backgroundColor: "transparent",
+  },
+  pinDotFilled: {
+    backgroundColor: "#22c55e",
+    borderColor: "#22c55e",
+  },
+  pinKeypad: {
+    marginTop: 8,
+  },
+  pinKeypadRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 16,
+    marginBottom: 12,
+  },
+  pinKey: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "rgba(148, 163, 184, 0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.20)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinKeyEmpty: {
+    width: 64,
+    height: 64,
+  },
+  pinKeyText: {
+    color: "#e2e8f0",
+    fontSize: 24,
+    fontWeight: "700",
+  },
+  pinActionBtn: {
+    marginTop: 16,
+    backgroundColor: "#22c55e",
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pinActionBtnText: {
+    color: "#0b1220",
+    fontWeight: "900",
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+  pinBackBtn: {
+    marginTop: 12,
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  pinBackBtnText: {
+    color: "#94a3b8",
+    fontWeight: "800",
+    fontSize: 13,
+  },
+
+  // =========================
+  // ✅ Battery Warning styles
+  // =========================
+  batteryBanner: {
+    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(251, 191, 36, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.28)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  batteryBannerCritical: {
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderColor: "rgba(239, 68, 68, 0.28)",
+  },
+  batteryBannerText: {
+    color: "#fbbf24",
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    fontSize: 12,
+    flex: 1,
+  },
+  batteryBannerTextCritical: {
+    color: "#fee2e2",
+  },
+  batteryWarningBadge: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(251, 191, 36, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.30)",
+    zIndex: 10,
+  },
+  batteryWarningBadgeCritical: {
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderColor: "rgba(239, 68, 68, 0.35)",
+  },
+  batteryWarningBadgeText: {
+    color: "#fbbf24",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  batteryWarningBadgeTextCritical: {
+    color: "#fee2e2",
+  },
+  cardBatteryCritical: {
+    borderColor: "rgba(239, 68, 68, 0.35)",
+  },
+  statWarning: {
+    backgroundColor: "rgba(251, 191, 36, 0.10)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  statTextCritical: {
+    color: "#ef4444",
+    fontWeight: "900",
+  },
+  statTextLow: {
+    color: "#fbbf24",
+    fontWeight: "900",
+  },
 });

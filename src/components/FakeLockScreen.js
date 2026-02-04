@@ -10,11 +10,24 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { cancelBatSignal } from "../services/BatSignal";
+import { supabase } from "../lib/supabase";
 
 const { width } = Dimensions.get("window");
 
-// 🔴 THE SECRET CODE TO EXIT PANIC MODE
-const MASTER_CODE = "1337";
+// 🔴 FALLBACK CODE (only used if user has no custom PIN set)
+const FALLBACK_CODE = "1337";
+
+// Simple hash function (must match fleet.js)
+const hashPin = (pin) => {
+  let hash = 0;
+  const str = String(pin || "");
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return `pin_${Math.abs(hash).toString(16).padStart(8, '0')}`;
+};
 
 // ✅ Hard timeout so UI never gets stuck
 const CANCEL_TIMEOUT_MS = 4000;
@@ -68,7 +81,27 @@ export default function FakeLockScreen({ onUnlock }) {
   const verifyPin = async (inputPin) => {
     if (isCancelling) return;
 
-    if (inputPin === MASTER_CODE) {
+    // ✅ Verify PIN against user's custom PIN (or fallback)
+    let isValid = false;
+
+    try {
+      // First try to verify against user's custom PIN
+      const hashed = hashPin(inputPin);
+      const { data, error } = await supabase.rpc("verify_user_sos_pin", { p_pin_hash: hashed });
+
+      if (!error && data?.valid === true) {
+        isValid = true;
+      } else if (data?.error === "No PIN set") {
+        // User has no custom PIN set, use fallback code
+        isValid = (inputPin === FALLBACK_CODE);
+      }
+    } catch (e) {
+      console.log("PIN verification error (falling back):", e?.message || e);
+      // If verification fails (network error, etc.), try fallback code
+      isValid = (inputPin === FALLBACK_CODE);
+    }
+
+    if (isValid) {
       // ✅ SUCCESS: Disarm the system (turn SOS off best-effort, then unlock UI no matter what)
       safeSet(() => {
         setIsCancelling(true);
@@ -175,8 +208,7 @@ export default function FakeLockScreen({ onUnlock }) {
         </View>
       </View>
 
-      {/* ✅ REMOVE THIS IN PRODUCTION */}
-      <Text style={styles.hint}>(Dev Hint: Code is {MASTER_CODE})</Text>
+      {/* PIN is now user-specific, no hint shown */}
     </View>
   );
 }
@@ -208,5 +240,4 @@ const styles = StyleSheet.create({
   },
   keyText: { color: "white", fontSize: 28, fontWeight: "400" },
   emptyKey: { width: 75, height: 75 },
-  hint: { color: "#444", marginTop: 20 },
 });

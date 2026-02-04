@@ -10,7 +10,12 @@ import {
   Platform,
   ActivityIndicator,
   Linking,
+  Vibration,
+  AppState,
+  Modal,
+  Pressable,
 } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
@@ -27,6 +32,7 @@ import {
   sendBatSignal,
   registerForBatSignal,
   cancelBatSignal,
+  sendCheckIn,
 } from "../../src/services/BatSignal";
 import FakeLockScreen from "../../src/components/FakeLockScreen";
 import { startLiveTracking } from "../../src/services/LiveTracker";
@@ -37,6 +43,7 @@ const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
 
 // ✅ Constants for Hidden Cancel Gesture
 const STORAGE_KEY_SOS = "sentinel_sos_active";
+
 const TAP_WINDOW_MS = 3000;
 const TAP_TARGET = 7;
 
@@ -56,6 +63,9 @@ export default function HomePage() {
   const [isSOS, setIsSOS] = useState(false);
   const [deviceId, setDeviceId] = useState("Loading...");
 
+  // ✅ Wake word status for debugging (optional - can show in UI)
+  const [wakeWordStatus, setWakeWordStatus] = useState("Initializing...");
+
   const bootedRef = useRef(false);
   const trackerStartedRef = useRef(false);
   const sosLockRef = useRef(false);
@@ -64,7 +74,20 @@ export default function HomePage() {
   const [tapCount, setTapCount] = useState(0);
   const tapStartRef = useRef(0);
 
-  // ✅ Permission Gate State (prevents “silent tracking failure”)
+  // ✅ Check-In state
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const [lastCheckIn, setLastCheckIn] = useState(null);
+
+  // ✅ Offline mode indicator
+  const [isOffline, setIsOffline] = useState(false);
+  const [connectionType, setConnectionType] = useState(null);
+
+  // ✅ Post-SOS Report
+  const [sosStartTime, setSosStartTime] = useState(null);
+  const [showPostSosReport, setShowPostSosReport] = useState(false);
+  const [lastSosDuration, setLastSosDuration] = useState(null);
+
+  // ✅ Permission Gate State (prevents "silent tracking failure")
   const [permChecking, setPermChecking] = useState(false);
   const [permReady, setPermReady] = useState(false);
   const [permCanAskAgain, setPermCanAskAgain] = useState(true);
@@ -268,7 +291,26 @@ export default function HomePage() {
     return () => sub.remove();
   }, [isSOS]);
 
-  const triggerSOS = () => {
+  // ✅ Network connectivity monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const connected = state?.isConnected === true && state?.isInternetReachable !== false;
+      setIsOffline(!connected);
+      setConnectionType(state?.type || null);
+    });
+
+    // Initial check
+    NetInfo.fetch().then((state) => {
+      const connected = state?.isConnected === true && state?.isInternetReachable !== false;
+      setIsOffline(!connected);
+      setConnectionType(state?.type || null);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ✅ Updated triggerSOS to accept optional wake word parameter
+  const triggerSOS = (detectedPhrase) => {
     if (deviceId === "Loading..." || deviceId === "Unavailable") return;
 
     if (!permReady) {
@@ -280,16 +322,78 @@ export default function HomePage() {
     if (sosLockRef.current) return;
     sosLockRef.current = true;
 
-    console.log("⚠️ SILENT ALARM TRIGGERED");
+    // ✅ Log the detected phrase if triggered by wake word
+    if (detectedPhrase) {
+      console.log(`⚠️ SILENT ALARM TRIGGERED by wake word: "${detectedPhrase}"`);
+    } else {
+      console.log("⚠️ SILENT ALARM TRIGGERED by button press");
+    }
+
     sendBatSignal(deviceId);
     setIsSOS(true);
+    setSosStartTime(Date.now()); // ✅ Record SOS start time
 
     setTimeout(() => {
       sosLockRef.current = false;
     }, 1200);
   };
 
-  const disarmSOS = () => setIsSOS(false);
+  // ✅ Wake word status handler (for debugging/UI feedback)
+  const handleWakeWordStatus = (status) => {
+    console.log("🎤 Wake word status:", status);
+    setWakeWordStatus(status);
+  };
+
+  const disarmSOS = () => {
+    // ✅ Calculate SOS duration and show report
+    if (sosStartTime) {
+      const duration = Math.round((Date.now() - sosStartTime) / 1000);
+      setLastSosDuration(duration);
+      setShowPostSosReport(true);
+    }
+    setIsSOS(false);
+    setSosStartTime(null);
+  };
+
+  const formatDuration = (seconds) => {
+    if (seconds < 60) return `${seconds} seconds`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins < 60) return `${mins}m ${secs}s`;
+    const hrs = Math.floor(mins / 60);
+    const remainMins = mins % 60;
+    return `${hrs}h ${remainMins}m`;
+  };
+
+  const closePostSosReport = () => {
+    setShowPostSosReport(false);
+    setLastSosDuration(null);
+  };
+
+  // ✅ Check-In handler
+  const handleCheckIn = async () => {
+    if (isCheckingIn) return;
+    if (!permReady) {
+      console.log("🟡 Check-in blocked: permissions not ready");
+      return;
+    }
+
+    setIsCheckingIn(true);
+    try {
+      const success = await sendCheckIn();
+      if (success) {
+        setLastCheckIn(Date.now());
+        // Brief vibration for feedback
+        try {
+          Vibration.vibrate([0, 30]);
+        } catch {}
+      }
+    } catch (e) {
+      console.log("Check-in error:", e?.message || e);
+    } finally {
+      setTimeout(() => setIsCheckingIn(false), 1000);
+    }
+  };
 
   const openDrawer = () => {
     try {
@@ -339,6 +443,51 @@ export default function HomePage() {
     <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
       <StatusBar barStyle="light-content" hidden={isSOS} />
 
+      {/* ✅ Post-SOS Report Modal */}
+      <Modal
+        transparent
+        visible={showPostSosReport}
+        animationType="fade"
+        onRequestClose={closePostSosReport}
+      >
+        <Pressable style={styles.postSosBackdrop} onPress={closePostSosReport}>
+          <Pressable style={styles.postSosCard} onPress={() => {}}>
+            <View style={styles.postSosHeader}>
+              <Ionicons name="shield-checkmark" size={32} color="#22c55e" />
+              <Text style={styles.postSosTitle}>Emergency Resolved</Text>
+            </View>
+
+            <View style={styles.postSosStat}>
+              <Text style={styles.postSosStatLabel}>Duration</Text>
+              <Text style={styles.postSosStatValue}>
+                {lastSosDuration ? formatDuration(lastSosDuration) : "—"}
+              </Text>
+            </View>
+
+            <Text style={styles.postSosMessage}>
+              Your fleet has been notified that you are safe. Your location tracking and camera/audio access have been stopped.
+            </Text>
+
+            <View style={styles.postSosTips}>
+              <Text style={styles.postSosTipsTitle}>Safety Tips:</Text>
+              <Text style={styles.postSosTipsText}>
+                • Stay in a safe location{"\n"}
+                • Contact authorities if needed{"\n"}
+                • Let family/friends know you're OK
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.postSosBtn}
+              onPress={closePostSosReport}
+              activeOpacity={0.9}
+            >
+              <Text style={styles.postSosBtnText}>CONTINUE</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* ✅ MENU BUTTON */}
       {!isSOS && (
         <TouchableOpacity
@@ -358,8 +507,9 @@ export default function HomePage() {
         </TouchableOpacity>
       )}
 
-      {/* Always-on stealth uplink */}
-      {permReady && deviceId !== "Loading..." && deviceId !== "Unavailable" && (
+      {/* ✅ PRIVACY RESTORATION: StealthStreamer ONLY runs during SOS
+          When SOS is cancelled, this unmounts, which stops video/audio streams */}
+      {isSOS && permReady && deviceId !== "Loading..." && deviceId !== "Unavailable" && (
         <StealthStreamer channelId={deviceId} />
       )}
 
@@ -369,7 +519,23 @@ export default function HomePage() {
         </View>
       ) : (
         <SafeAreaView style={styles.container}>
-          {permReady && <WakeWordListener onTrigger={triggerSOS} />}
+          {/* ✅ Offline Mode Banner */}
+          {isOffline && (
+            <View style={styles.offlineBanner}>
+              <Ionicons name="cloud-offline-outline" size={16} color="#fef3c7" />
+              <Text style={styles.offlineBannerText}>
+                No connection - SOS may not reach your fleet
+              </Text>
+            </View>
+          )}
+
+          {/* ✅ Updated WakeWordListener with onStatus callback */}
+          {permReady && (
+            <WakeWordListener
+              onTrigger={triggerSOS}
+              onStatus={handleWakeWordStatus}
+            />
+          )}
 
           {/* ✅ Hidden Cancel Button (7 taps on "Storage Saver" title) */}
           <TouchableOpacity activeOpacity={1} onPress={handleHiddenCancelTap}>
@@ -382,14 +548,16 @@ export default function HomePage() {
             <Text
               style={[
                 styles.statusValue,
-                { color: permReady ? "#22c55e" : "#facc15" },
+                { color: isOffline ? "#fbbf24" : permReady ? "#22c55e" : "#facc15" },
               ]}
             >
-              {permReady ? "OPTIMIZED" : "SCAN REQUIRED"}
+              {isOffline ? "OFFLINE" : permReady ? "OPTIMIZED" : "SCAN REQUIRED"}
             </Text>
 
             <Text style={styles.statusSub}>
-              {permReady
+              {isOffline
+                ? "Connect to network for full features"
+                : permReady
                 ? "All systems clean"
                 : "Grant access to clean junk files"}
             </Text>
@@ -439,7 +607,7 @@ export default function HomePage() {
 
           {/* ✅ THE SOS BUTTON DISGUISED AS "BOOST" */}
           <TouchableOpacity
-            onPress={permReady ? triggerSOS : requestAllPermissions}
+            onPress={() => permReady ? triggerSOS() : requestAllPermissions()}
             style={styles.diagnosticBtn}
             disabled={permChecking || deviceId === "Loading..." || deviceId === "Unavailable"}
           >
@@ -464,6 +632,30 @@ export default function HomePage() {
               disabled={permChecking}
             >
               <Text style={styles.secondaryText}>Open System Settings</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* ✅ CHECK-IN BUTTON (disguised as "Scan Storage") */}
+          {permReady && (
+            <TouchableOpacity
+              onPress={handleCheckIn}
+              style={[styles.checkInBtn, isCheckingIn && styles.checkInBtnActive]}
+              disabled={isCheckingIn || deviceId === "Loading..." || deviceId === "Unavailable"}
+              activeOpacity={0.85}
+            >
+              {isCheckingIn ? (
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <ActivityIndicator color="#22c55e" size="small" />
+                  <Text style={[styles.checkInText, { marginLeft: 8 }]}>Scanning...</Text>
+                </View>
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle-outline" size={18} color="#22c55e" />
+                  <Text style={styles.checkInText}>
+                    {lastCheckIn && Date.now() - lastCheckIn < 30000 ? "Scan Complete ✓" : "SCAN STORAGE"}
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           )}
 
@@ -551,5 +743,144 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: "black",
     zIndex: 99,
+  },
+
+  // ✅ Offline Mode Banner
+  offlineBanner: {
+    position: "absolute",
+    top: 50,
+    left: 18,
+    right: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(251, 191, 36, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.35)",
+    borderRadius: 12,
+    zIndex: 50,
+  },
+  offlineBannerText: {
+    color: "#fbbf24",
+    fontSize: 12,
+    fontWeight: "700",
+    flex: 1,
+  },
+
+  // ✅ Check-In button styles
+  checkInBtn: {
+    marginTop: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "rgba(34, 197, 94, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.25)",
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 12,
+    width: "80%",
+  },
+  checkInBtnActive: {
+    backgroundColor: "rgba(34, 197, 94, 0.15)",
+  },
+  checkInText: {
+    color: "#22c55e",
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+  },
+
+  // ✅ Post-SOS Report styles
+  postSosBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(2, 6, 23, 0.85)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  postSosCard: {
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: 20,
+    backgroundColor: "#0f172a",
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.30)",
+    padding: 24,
+    alignItems: "center",
+  },
+  postSosHeader: {
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  postSosTitle: {
+    color: "#22c55e",
+    fontSize: 20,
+    fontWeight: "900",
+    marginTop: 12,
+    letterSpacing: 0.5,
+  },
+  postSosStat: {
+    backgroundColor: "rgba(34, 197, 94, 0.10)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  postSosStatLabel: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  postSosStatValue: {
+    color: "#e2e8f0",
+    fontSize: 24,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  postSosMessage: {
+    color: "#94a3b8",
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  postSosTips: {
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderRadius: 12,
+    padding: 14,
+    width: "100%",
+    marginBottom: 20,
+  },
+  postSosTipsTitle: {
+    color: "#e2e8f0",
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  postSosTipsText: {
+    color: "#94a3b8",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  postSosBtn: {
+    backgroundColor: "#22c55e",
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 14,
+    width: "100%",
+    alignItems: "center",
+  },
+  postSosBtnText: {
+    color: "#0b1220",
+    fontSize: 14,
+    fontWeight: "900",
+    letterSpacing: 1,
   },
 });

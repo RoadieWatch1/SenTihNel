@@ -126,6 +126,7 @@ async function waitForMembership(userId, groupId, { tries = 6, delayMs = 250 } =
 
   for (let i = 0; i < tries; i++) {
     try {
+      // Check membership
       const { data, error } = await supabase
         .from("group_members")
         .select("group_id")
@@ -135,10 +136,23 @@ async function waitForMembership(userId, groupId, { tries = 6, delayMs = 250 } =
 
       if (!error && Array.isArray(data) && data.length > 0) return true;
 
+      // ✅ Also check if user OWNS this fleet
+      const { data: ownerData, error: ownerError } = await supabase
+        .from("groups")
+        .select("id")
+        .eq("id", groupId)
+        .eq("owner_user_id", userId)
+        .limit(1);
+
+      if (!ownerError && Array.isArray(ownerData) && ownerData.length > 0) {
+        console.log("✅ handshakeDevice: User is OWNER of fleet, allowing handshake");
+        return true;
+      }
+
       // if RLS blocks reads later, we don't want infinite loops — break and let handshake proceed
       if (error) {
         console.log("🟡 handshakeDevice membership check warning:", error.message);
-        return true; // best-effort: don’t block app if RLS isn’t ready yet
+        return true; // best-effort: don't block app if RLS isn't ready yet
       }
     } catch (e) {
       console.log("🟡 handshakeDevice membership check exception:", e?.message || e);

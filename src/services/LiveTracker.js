@@ -100,6 +100,14 @@ let claimCache = {
 const CLAIM_CACHE_MS_OK = 60_000;
 const CLAIM_CACHE_MS_FAIL = 10_000;
 
+// ✅ Clear all tracker caches (call when switching fleets)
+export const clearTrackerCaches = () => {
+  membershipCache = { userId: null, groupId: null, ok: false, checkedAt: 0 };
+  bindCache = { userId: null, deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+  claimCache = { deviceId: null, groupId: null, ok: false, checkedAt: 0 };
+  console.log("✅ TRACKER: Caches cleared for fleet switch");
+};
+
 const safeIsoNow = () => new Date().toISOString();
 const safeCoord = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
@@ -255,14 +263,18 @@ const fetchLastKnownLocationBestEffort = async ({ force = false } = {}) => {
  * ✅ Phase 5 update:
  * forceOneShotSync now supports:
  * - injected coords/location (from SOS trigger)
- * - fallback to getLastKnownPositionAsync if current GPS can’t lock yet
+ * - fallback to getLastKnownPositionAsync if current GPS can't lock yet
+ * - optional status override (e.g., "OFFLINE" for privacy restoration)
  */
 export const forceOneShotSync = async (opts = {}) => {
+  // ✅ PRIVACY RESTORATION: Support status override
+  const statusOverride = opts?.status || null;
+
   try {
     const injected = normalizeInjectedLocation(opts?.location || opts?.coords || opts);
     if (injected) {
-      // Immediately process the injected “best effort” location
-      await handleLocationUpdate(injected);
+      // Immediately process the injected "best effort" location
+      await handleLocationUpdate(injected, { statusOverride });
       return;
     }
 
@@ -273,13 +285,13 @@ export const forceOneShotSync = async (opts = {}) => {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
-      await handleLocationUpdate(loc);
+      await handleLocationUpdate(loc, { statusOverride });
       return;
     } catch (e) {
       // Fallback to last-known
       const last = await fetchLastKnownLocationBestEffort({ force: true });
       if (last) {
-        await handleLocationUpdate(last);
+        await handleLocationUpdate(last, { statusOverride });
         return;
       }
 
@@ -334,7 +346,7 @@ const requireSessionUser = async () => {
   }
 };
 
-// ✅ Check membership (cached)
+// ✅ Check membership OR ownership (cached)
 const ensureMemberOfGroup = async (userId, groupId) => {
   if (!userId || !groupId) return false;
 
@@ -350,18 +362,40 @@ const ensureMemberOfGroup = async (userId, groupId) => {
   }
 
   try {
-    const { data, error } = await supabase
+    // Check membership first
+    const { data: memberData, error: memberError } = await supabase
       .from("group_members")
       .select("group_id")
       .eq("user_id", userId)
       .eq("group_id", groupId)
       .limit(1);
 
-    const ok = !error && Array.isArray(data) && data.length > 0;
-    membershipCache = { userId, groupId, ok, checkedAt: now };
+    const isMember = !memberError && Array.isArray(memberData) && memberData.length > 0;
 
-    if (error) console.log("🟡 MEMBERSHIP CHECK ERROR:", error.message || error);
-    return ok;
+    if (isMember) {
+      membershipCache = { userId, groupId, ok: true, checkedAt: now };
+      return true;
+    }
+
+    // ✅ Also check if user OWNS this fleet (can track even without being a "member")
+    const { data: ownerData, error: ownerError } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("id", groupId)
+      .eq("owner_user_id", userId)
+      .limit(1);
+
+    const isOwner = !ownerError && Array.isArray(ownerData) && ownerData.length > 0;
+
+    if (isOwner) {
+      console.log("✅ TRACKER: User is OWNER of fleet, allowing tracking");
+      membershipCache = { userId, groupId, ok: true, checkedAt: now };
+      return true;
+    }
+
+    membershipCache = { userId, groupId, ok: false, checkedAt: now };
+    if (memberError) console.log("🟡 MEMBERSHIP CHECK ERROR:", memberError.message || memberError);
+    return false;
   } catch (e) {
     membershipCache = { userId, groupId, ok: false, checkedAt: now };
     return false;
@@ -466,8 +500,9 @@ try {
 
 /**
  * 2️⃣ SMART UPDATE HANDLER
+ * ✅ PRIVACY RESTORATION: Now supports statusOverride (e.g., "OFFLINE")
  */
-const handleLocationUpdate = async (location) => {
+const handleLocationUpdate = async (location, { statusOverride = null } = {}) => {
   const acc = location?.coords?.accuracy;
   const isPoorGps = typeof acc === "number" && acc > 50;
 
@@ -478,7 +513,7 @@ const handleLocationUpdate = async (location) => {
 
   try {
     isSending = true;
-    await processUpload(location, { isPoorGps });
+    await processUpload(location, { isPoorGps, statusOverride });
 
     while (pendingLocation) {
       const next = pendingLocation;
@@ -498,8 +533,9 @@ const handleLocationUpdate = async (location) => {
 
 /**
  * 3️⃣ UPLOAD WORKER
+ * ✅ PRIVACY RESTORATION: Now supports statusOverride (e.g., "OFFLINE")
  */
-const processUpload = async (location, { isPoorGps }) => {
+const processUpload = async (location, { isPoorGps, statusOverride = null }) => {
   const user = await requireSessionUser();
   if (!user) {
     const now = Date.now();
@@ -577,8 +613,10 @@ const processUpload = async (location, { isPoorGps }) => {
     battery_level: batteryPercent ?? -1,
   };
 
+  // ✅ PRIVACY RESTORATION: Use statusOverride if provided (e.g., "OFFLINE")
   const sosOn = await isSOSActive();
-  setIfAllowed(payload, "status", sosOn ? "SOS" : "ACTIVE");
+  const finalStatus = statusOverride || (sosOn ? "SOS" : "ACTIVE");
+  setIfAllowed(payload, "status", finalStatus);
   setIfAllowed(payload, "last_updated", safeIsoNow());
   setIfAllowed(payload, "gps_accuracy_m", typeof accuracyM === "number" ? Math.round(accuracyM) : lastKnownAccuracyM);
 
@@ -623,50 +661,54 @@ const processUpload = async (location, { isPoorGps }) => {
   }
 
   console.log(
-    `📡 SYNC [${payload.status || "ACTIVE"}]: ${payload.latitude?.toFixed(4)}, ${payload.longitude?.toFixed(
+    `📡 SYNC [${finalStatus}]: ${payload.latitude?.toFixed(4)}, ${payload.longitude?.toFixed(
       4
     )} | 🔋 ${payload.battery_level}% | 👥 ${payload.group_id} | 🎯 ${payload.gps_quality || "?"}`
   );
 
-  const attemptUpsert = async () =>
-    supabase.from("tracking_sessions").upsert([payload], { onConflict: "device_id" });
+  // ✅ Use SECURITY DEFINER RPC to bypass all RLS issues
+  const { data: rpcResult, error: rpcError } = await supabase.rpc("upsert_tracking_session", {
+    p_device_id: deviceId,
+    p_group_id: groupId,
+    p_data: {
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      battery_level: payload.battery_level,
+      status: payload.status,
+      last_updated: payload.last_updated,
+      gps_quality: payload.gps_quality,
+      gps_accuracy_m: payload.gps_accuracy_m,
+      speed: payload.speed,
+      heading: payload.heading,
+    },
+  });
 
-  // ✅ First attempt: normal upsert
-  let { error } = await attemptUpsert();
+  // Check if RPC returned an error in the response
+  if (rpcResult?.ok === false) {
+    console.log("🟡 SYNC RPC error:", rpcResult?.error);
+    return;
+  }
 
-  // ✅ If RLS blocked due to stale row under different group_id, claim + retry
-  if (error && isRlsError(error)) {
-    console.log("🟡 RLS blocked on upsert — attempting CLAIM + retry (stale row fix)...");
-    const claimed = await claimTrackingDeviceIfNeeded(deviceId, groupId, { force: true });
-
-    if (claimed) {
-      const retry = await attemptUpsert();
-      error = retry?.error || null;
-      if (!error) {
-        console.log("✅ SYNC OK (after claim)");
+  if (rpcError) {
+    // Fallback: if RPC doesn't exist yet, try direct upsert
+    if (rpcError.message?.includes("function") && rpcError.message?.includes("does not exist")) {
+      console.log("🟡 upsert_tracking_session RPC not found, falling back to direct upsert...");
+      const { error: directError } = await supabase.from("tracking_sessions").upsert([payload], { onConflict: "device_id" });
+      if (directError) {
+        console.log("❌ Direct upsert also failed:", directError.message);
         return;
       }
+    } else {
+      console.log("❌ SYNC RPC error:", rpcError.message);
+      return;
     }
   }
 
-  // ✅ If still blocked, force-refresh device binding once and retry once more
-  if (error && isRlsError(error)) {
-    console.log("🟡 Still blocked — forcing DEVICE HANDSHAKE (move/rebind) + retry once...");
-    const rebound = await ensureDeviceBoundToUserAndGroup(user.id, deviceId, groupId, { force: true });
+  console.log("✅ SYNC OK");
+  return;
 
-    if (rebound) {
-      // After a forced rebind, also force claim once to guarantee a clean row
-      await claimTrackingDeviceIfNeeded(deviceId, groupId, { force: true });
-
-      const retry2 = await attemptUpsert();
-      error = retry2?.error || null;
-      if (!error) {
-        console.log("✅ SYNC OK (after handshake refresh)");
-        return;
-      }
-    }
-  }
-
+  // Legacy error handling removed - RPC handles all cases now
+  /*
   if (error) {
     if (isRlsError(error)) {
       console.error(
@@ -694,6 +736,7 @@ RPCs installed (you confirmed):
   }
 
   console.log("✅ SYNC OK");
+  */
 };
 
 /**

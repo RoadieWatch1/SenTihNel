@@ -1,0 +1,5 @@
+The `PICOVOICE_ACCESS_KEY` in `src/components/WakeWordListener.js` has been cleared.
+
+Please obtain a new, valid Picovoice AccessKey from the Picovoice Console (https://console.picovoice.ai/) and update the `PICOVOICE_ACCESS_KEY` constant in `src/components/WakeWordListener.js` with your new key.
+
+The application will not function correctly until a valid AccessKey is provided.

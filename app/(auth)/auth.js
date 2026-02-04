@@ -28,6 +28,7 @@ import { forceOneShotSync } from "../../src/services/LiveTracker";
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
 const STORAGE_KEY_INVITE_CODE = "sentinel_invite_code";
 const STORAGE_KEY_PENDING_INVITE = "sentinel_pending_invite_code";
+const STORAGE_KEY_PENDING_FLEET_TYPE = "sentinel_pending_fleet_type"; // ✅ Store fleet type for pending join
 const STORAGE_KEY_POST_LOGIN_ACTION = "sentinel_post_login_action"; // "create_required"
 
 // ✅ Phase 1 Option A: name is stored on devices.display_name
@@ -446,6 +447,7 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
+  const [fleetType, setFleetType] = useState("family"); // "family" or "work"
 
   const [displayName, setDisplayName] = useState("");
 
@@ -923,8 +925,10 @@ export default function AuthPage() {
         if (!authData?.session) {
           if (actionMode === "join" && cleanCode) {
             await AsyncStorage.setItem(STORAGE_KEY_PENDING_INVITE, cleanCode);
+            await AsyncStorage.setItem(STORAGE_KEY_PENDING_FLEET_TYPE, fleetType); // ✅ Store fleet type
           } else {
             await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
+            await AsyncStorage.removeItem(STORAGE_KEY_PENDING_FLEET_TYPE);
           }
 
           openModal({
@@ -1033,6 +1037,7 @@ export default function AuthPage() {
 
         const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, {
           p_invite_code: cleanCode,
+          p_fleet_type: fleetType, // ✅ Pass user's chosen fleet type
         });
         if (joinErr) throw joinErr;
 
@@ -1084,15 +1089,19 @@ export default function AuthPage() {
         await assertServerIsExpected(matched.id, matched.email || cleanEmail, "before-pending-join");
 
         const targetGroupId = await resolveGroupIdByInviteCode(pending);
+        // ✅ Retrieve stored fleet type (default to "family" if not found)
+        const pendingFleetType = (await AsyncStorage.getItem(STORAGE_KEY_PENDING_FLEET_TYPE)) || "family";
 
         await AsyncStorage.multiRemove([STORAGE_KEY_GROUP_ID, STORAGE_KEY_INVITE_CODE]);
 
         const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, {
           p_invite_code: pending,
+          p_fleet_type: pendingFleetType, // ✅ Pass stored fleet type
         });
 
         if (joinErr) {
           await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
+          await AsyncStorage.removeItem(STORAGE_KEY_PENDING_FLEET_TYPE);
         } else {
           const extracted = extractGroupIdFromRpc(joinData);
           const expected = extracted || targetGroupId;
@@ -1106,6 +1115,7 @@ export default function AuthPage() {
             if (code) await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, String(code));
 
             await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
+            await AsyncStorage.removeItem(STORAGE_KEY_PENDING_FLEET_TYPE);
             await AsyncStorage.removeItem(STORAGE_KEY_POST_LOGIN_ACTION);
 
             await assertServerIsExpected(matched.id, matched.email || cleanEmail, "before-handshake(pending)");
@@ -1115,7 +1125,7 @@ export default function AuthPage() {
             openModal({
               variant: "success",
               title: "Fleet Linked",
-              message: "Your account is now linked to the fleet.",
+              message: `Your account is now linked to the fleet as your ${pendingFleetType} fleet.`,
               primaryText: "CONTINUE",
               onPrimary: () => router.replace("/(app)/home"),
             });
@@ -1123,6 +1133,7 @@ export default function AuthPage() {
           }
 
           await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
+          await AsyncStorage.removeItem(STORAGE_KEY_PENDING_FLEET_TYPE);
         }
       }
 
@@ -1353,15 +1364,72 @@ export default function AuthPage() {
             )}
 
             {showInviteInput && (
-              <TextInput
-                style={styles.input}
-                placeholder="Invite Code (Required)"
-                placeholderTextColor="#64748b"
-                value={inviteCode}
-                onChangeText={setInviteCode}
-                keyboardType="default"
-                autoCapitalize="characters"
-              />
+              <>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Invite Code (Required)"
+                  placeholderTextColor="#64748b"
+                  value={inviteCode}
+                  onChangeText={setInviteCode}
+                  keyboardType="default"
+                  autoCapitalize="characters"
+                />
+
+                {/* ✅ Fleet Type Selector */}
+                <View style={styles.fleetTypeContainer}>
+                  <Text style={styles.fleetTypeLabel}>Join as:</Text>
+                  <View style={styles.fleetTypeButtons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.fleetTypeBtn,
+                        fleetType === "family" && styles.fleetTypeBtnActive,
+                      ]}
+                      onPress={() => setFleetType("family")}
+                      disabled={loading}
+                    >
+                      <Ionicons
+                        name="home"
+                        size={16}
+                        color={fleetType === "family" ? "#0b1220" : "#94a3b8"}
+                      />
+                      <Text
+                        style={[
+                          styles.fleetTypeBtnText,
+                          fleetType === "family" && styles.fleetTypeBtnTextActive,
+                        ]}
+                      >
+                        Family
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.fleetTypeBtn,
+                        fleetType === "work" && styles.fleetTypeBtnActive,
+                      ]}
+                      onPress={() => setFleetType("work")}
+                      disabled={loading}
+                    >
+                      <Ionicons
+                        name="briefcase"
+                        size={16}
+                        color={fleetType === "work" ? "#0b1220" : "#94a3b8"}
+                      />
+                      <Text
+                        style={[
+                          styles.fleetTypeBtnText,
+                          fleetType === "work" && styles.fleetTypeBtnTextActive,
+                        ]}
+                      >
+                        Work
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.fleetTypeHint}>
+                    You can have one Family fleet and one Work fleet
+                  </Text>
+                </View>
+              </>
             )}
 
             <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={loading}>
@@ -1496,6 +1564,59 @@ const styles = StyleSheet.create({
   divider: { color: "#334155" },
 
   footnote: { color: "#334155", textAlign: "center", marginTop: 20, fontSize: 12 },
+
+  // ✅ Fleet Type Selector styles
+  fleetTypeContainer: {
+    marginBottom: 14,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(148, 163, 184, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.12)",
+  },
+  fleetTypeLabel: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 10,
+    letterSpacing: 0.3,
+  },
+  fleetTypeButtons: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  fleetTypeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.16)",
+  },
+  fleetTypeBtnActive: {
+    backgroundColor: "#22c55e",
+    borderColor: "#22c55e",
+  },
+  fleetTypeBtnText: {
+    color: "#94a3b8",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  fleetTypeBtnTextActive: {
+    color: "#0b1220",
+  },
+  fleetTypeHint: {
+    color: "#64748b",
+    fontSize: 10,
+    marginTop: 10,
+    textAlign: "center",
+    fontWeight: "600",
+  },
 
   setupCard: {
     backgroundColor: "#0f172a",
