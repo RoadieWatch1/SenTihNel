@@ -9,6 +9,7 @@ import {
   Vibration,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { cancelBatSignal } from "../services/BatSignal";
 import { supabase } from "../lib/supabase";
 
@@ -31,6 +32,7 @@ const hashPin = (pin) => {
 
 // ✅ Hard timeout so UI never gets stuck
 const CANCEL_TIMEOUT_MS = 4000;
+const PIN_VERIFY_TIMEOUT_MS = 3000; // Timeout for Supabase PIN check
 
 export default function FakeLockScreen({ onUnlock }) {
   const [pin, setPin] = useState("");
@@ -40,6 +42,7 @@ export default function FakeLockScreen({ onUnlock }) {
 
   // ✅ Avoid setState after unmount when onUnlock navigates away
   const mountedRef = useRef(true);
+  const verifyingRef = useRef(false); // Prevent duplicate verifyPin calls
   useEffect(() => {
     return () => {
       mountedRef.current = false;
@@ -54,19 +57,19 @@ export default function FakeLockScreen({ onUnlock }) {
     return Promise.race([
       promise,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("cancel_timeout")), ms)
+        setTimeout(() => reject(new Error("timeout")), ms)
       ),
     ]);
   };
 
   const handlePress = (num) => {
-    if (isCancelling) return;
+    if (isCancelling || verifyingRef.current) return;
 
     if (pin.length < 4) {
       const newPin = pin + num;
       setPin(newPin);
 
-      // Check immediately when 4 digits are entered
+      // Auto-verify when 4 digits are entered
       if (newPin.length === 4) {
         verifyPin(newPin);
       }
@@ -74,73 +77,91 @@ export default function FakeLockScreen({ onUnlock }) {
   };
 
   const handleBackspace = () => {
-    if (isCancelling) return;
+    if (isCancelling || verifyingRef.current) return;
     setPin(pin.slice(0, -1));
   };
 
+  const doUnlock = async () => {
+    // ✅ Show unlocking state immediately
+    safeSet(() => {
+      setIsCancelling(true);
+      setMessage("Unlocking...");
+      setPin("");
+      setAttempts(0);
+    });
+
+    // ✅ Best-effort cancel SOS, but NEVER block unlock forever
+    try {
+      await withTimeout(cancelBatSignal(), CANCEL_TIMEOUT_MS);
+    } catch (e) {
+      console.log("⚠️ SOS cancel timed out/failed (non-fatal):", e?.message || e);
+    }
+
+    // ✅ Always return to normal app UI — this is the critical call
+    try {
+      if (typeof onUnlock === "function") onUnlock();
+    } catch (e) {
+      console.log("⚠️ onUnlock error:", e?.message || e);
+    }
+  };
+
   const verifyPin = async (inputPin) => {
-    if (isCancelling) return;
+    // Prevent duplicate concurrent calls
+    if (isCancelling || verifyingRef.current) return;
+    verifyingRef.current = true;
+
+    safeSet(() => setMessage("Verifying..."));
 
     // ✅ Verify PIN against user's custom PIN (or fallback)
     let isValid = false;
 
     try {
-      // First try to verify against user's custom PIN
       const hashed = hashPin(inputPin);
-      const { data, error } = await supabase.rpc("verify_user_sos_pin", { p_pin_hash: hashed });
+      // ✅ FIX: Add timeout to Supabase RPC call so it never hangs
+      const { data, error } = await withTimeout(
+        supabase.rpc("verify_user_sos_pin", { p_pin_hash: hashed }),
+        PIN_VERIFY_TIMEOUT_MS
+      );
 
       if (!error && data?.valid === true) {
         isValid = true;
       } else if (data?.error === "No PIN set") {
-        // User has no custom PIN set, use fallback code
         isValid = (inputPin === FALLBACK_CODE);
       }
     } catch (e) {
-      console.log("PIN verification error (falling back):", e?.message || e);
-      // If verification fails (network error, etc.), try fallback code
-      isValid = (inputPin === FALLBACK_CODE);
+      console.log("PIN verification error (falling back to local):", e?.message || e);
+      // If Supabase is unreachable (timeout, network error, expired session),
+      // verify against locally cached PIN hash, then fallback code
+      const hashed = hashPin(inputPin);
+      try {
+        const cachedHash = await AsyncStorage.getItem("sentinel_pin_hash");
+        console.log("PIN local check:", {
+          hasCache: !!cachedHash,
+          cachePrefix: cachedHash?.slice(0, 12),
+          inputPrefix: hashed?.slice(0, 12),
+          match: cachedHash === hashed,
+        });
+        if (cachedHash && cachedHash === hashed) {
+          isValid = true;
+        } else {
+          isValid = (inputPin === FALLBACK_CODE);
+        }
+      } catch {
+        isValid = (inputPin === FALLBACK_CODE);
+      }
     }
 
     if (isValid) {
-      // ✅ SUCCESS: Disarm the system (turn SOS off best-effort, then unlock UI no matter what)
-      safeSet(() => {
-        setIsCancelling(true);
-        setMessage("Unlocking...");
-      });
-
-      // Clear keypad immediately (so it never feels stuck)
-      safeSet(() => {
-        setPin("");
-        setAttempts(0);
-      });
-
-      // ✅ Best-effort cancel, but NEVER block unlock forever
-      try {
-        await withTimeout(cancelBatSignal(), CANCEL_TIMEOUT_MS);
-      } catch (e) {
-        // Timeout or failure is non-fatal — stealth > perfection
-        console.log("⚠️ SOS cancel timed out/failed (non-fatal):", e?.message || e);
-      }
-
-      // ✅ Always return to normal app UI
-      try {
-        if (typeof onUnlock === "function") onUnlock();
-      } catch {}
-
-      // If the screen is still mounted (sometimes onUnlock doesn't unmount),
-      // re-enable input.
-      safeSet(() => {
-        setIsCancelling(false);
-        setMessage("Enter PIN");
-      });
-
+      // ✅ SUCCESS: Unlock immediately, don't let anything block it
+      verifyingRef.current = false;
+      await doUnlock();
       return;
     }
 
-    // ❌ FAILURE: Fake the error
+    // ❌ FAILURE
+    verifyingRef.current = false;
     Vibration.vibrate(400);
 
-    // Fix attempts logic (avoid stale state bug)
     const nextAttempts = attempts + 1;
 
     safeSet(() => {
@@ -149,7 +170,6 @@ export default function FakeLockScreen({ onUnlock }) {
       setAttempts(nextAttempts);
     });
 
-    // Psychological trick: After 3 fails, simulate a lockout
     if (nextAttempts >= 3) {
       safeSet(() => setMessage("Try again in 30 seconds"));
     } else {
@@ -195,7 +215,20 @@ export default function FakeLockScreen({ onUnlock }) {
         <View style={styles.row}>{[4, 5, 6].map(renderKey)}</View>
         <View style={styles.row}>{[7, 8, 9].map(renderKey)}</View>
         <View style={styles.row}>
-          <View style={styles.emptyKey} />
+          <TouchableOpacity
+            onPress={() => {
+              if (pin.length === 4 && !verifyingRef.current) verifyPin(pin);
+            }}
+            style={[
+              styles.key,
+              pin.length === 4 ? styles.submitKey : styles.submitKeyDisabled,
+              (isCancelling || verifyingRef.current) && styles.keyDisabled,
+            ]}
+            activeOpacity={0.8}
+            disabled={isCancelling || pin.length < 4}
+          >
+            <Ionicons name="checkmark-circle-outline" size={32} color={pin.length === 4 ? "#4CAF50" : "rgba(255,255,255,0.3)"} />
+          </TouchableOpacity>
           {renderKey(0)}
           <TouchableOpacity
             onPress={handleBackspace}
@@ -239,5 +272,12 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   keyText: { color: "white", fontSize: 28, fontWeight: "400" },
-  emptyKey: { width: 75, height: 75 },
+  submitKey: {
+    backgroundColor: "rgba(76, 175, 80, 0.25)",
+    borderWidth: 1,
+    borderColor: "rgba(76, 175, 80, 0.5)",
+  },
+  submitKeyDisabled: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
 });

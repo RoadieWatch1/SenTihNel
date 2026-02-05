@@ -584,20 +584,28 @@ export default function FleetScreen() {
     resolveIsAdmin(groupId);
   }, [groupId, resolveIsAdmin]);
 
-  // ✅ Check if user has SOS PIN set
+  // ✅ Check if user has SOS PIN set (falls back to local cache if Supabase is unreachable)
   const checkHasPin = useCallback(async () => {
     try {
       const { data, error } = await supabase.rpc(RPC_HAS_SOS_PIN);
       if (error) {
         console.log("checkHasPin warning:", error.message);
-        if (isMountedRef.current) setHasPin(false);
+        // Fall back to local cache
+        const cached = await AsyncStorage.getItem("sentinel_pin_hash");
+        if (isMountedRef.current) setHasPin(!!cached);
         return;
       }
       const result = data?.has_pin === true;
       if (isMountedRef.current) setHasPin(result);
     } catch (e) {
       console.log("checkHasPin error:", e?.message || e);
-      if (isMountedRef.current) setHasPin(false);
+      // Fall back to local cache
+      try {
+        const cached = await AsyncStorage.getItem("sentinel_pin_hash");
+        if (isMountedRef.current) setHasPin(!!cached);
+      } catch {
+        if (isMountedRef.current) setHasPin(false);
+      }
     }
   }, []);
 
@@ -678,12 +686,32 @@ export default function FleetScreen() {
 
     try {
       const hashed = hashPin(pinInput);
-      const { data, error } = await supabase.rpc(RPC_SET_SOS_PIN, { p_pin_hash: hashed });
 
-      if (error) throw error;
+      // Always save locally first (works offline)
+      await AsyncStorage.setItem("sentinel_pin_hash", hashed);
 
-      if (data?.success === false) {
-        throw new Error(data?.error || "Could not save PIN");
+      // Verify the save actually worked
+      const verify = await AsyncStorage.getItem("sentinel_pin_hash");
+      if (verify !== hashed) {
+        throw new Error("PIN failed to save to device storage. Please try again.");
+      }
+      console.log("✅ PIN saved locally, hash:", hashed.slice(0, 12) + "...");
+
+      // Try to sync to Supabase (may fail if auth is expired)
+      let cloudSaved = false;
+      try {
+        const { data, error } = await Promise.race([
+          supabase.rpc(RPC_SET_SOS_PIN, { p_pin_hash: hashed }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
+        ]);
+
+        if (!error && data?.success !== false) {
+          cloudSaved = true;
+        } else {
+          console.log("PIN cloud save warning:", error?.message || data?.error);
+        }
+      } catch (e) {
+        console.log("PIN cloud save failed (saved locally):", e?.message || e);
       }
 
       if (isMountedRef.current) {
@@ -691,7 +719,12 @@ export default function FleetScreen() {
         setPinModalVisible(false);
       }
 
-      Alert.alert("PIN Set", "Your SOS PIN has been saved. Remember it - this PIN cannot be changed.");
+      Alert.alert(
+        "PIN Saved",
+        cloudSaved
+          ? "Your SOS PIN has been saved. Remember this PIN - it unlocks your phone during SOS."
+          : "PIN saved to this device. It will sync to the cloud when connection is restored."
+      );
     } catch (e) {
       const msg = e?.message || "Could not save PIN";
       console.log("save PIN error:", msg);
@@ -961,48 +994,89 @@ export default function FleetScreen() {
 
     setLoading(true);
 
-    // ✅ First, ensure user has both Work and Family fleets
-    const fleets = await ensureUserFleets();
+    try {
+      // ✅ First, ensure user has both Work and Family fleets (timeout: 8s)
+      let fleets = null;
+      try {
+        fleets = await Promise.race([
+          ensureUserFleets(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+        ]);
+      } catch (e) {
+        console.log("ensureUserFleets timed out or failed:", e?.message || e);
+      }
 
-    // Default to Family fleet on initial load (user can switch via tabs)
-    let gidToUse = null;
-    let codeToUse = null;
+      // Default to Family fleet on initial load (user can switch via tabs)
+      let gidToUse = null;
+      let codeToUse = null;
 
-    if (fleets) {
-      // Default to family fleet on boot
-      const defaultFleet = fleets.family || fleets.work;
-      if (defaultFleet?.groupId) {
-        gidToUse = defaultFleet.groupId;
-        codeToUse = defaultFleet.inviteCode;
-        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse);
-        if (codeToUse) {
-          await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, codeToUse);
-        }
-        activeGroupIdRef.current = gidToUse; // ✅ Track active group
-        if (isMountedRef.current) {
-          setGroupId(gidToUse);
-          setInviteCode(codeToUse || "");
-          setInviteLoading(false);
+      if (fleets) {
+        // Default to family fleet on boot
+        const defaultFleet = fleets.family || fleets.work;
+        if (defaultFleet?.groupId) {
+          gidToUse = defaultFleet.groupId;
+          codeToUse = defaultFleet.inviteCode;
+          await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse);
+          if (codeToUse) {
+            await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, codeToUse);
+          }
+          activeGroupIdRef.current = gidToUse; // ✅ Track active group
+          if (isMountedRef.current) {
+            setGroupId(gidToUse);
+            setInviteCode(codeToUse || "");
+            setInviteLoading(false);
+          }
         }
       }
+
+      // Fall back to cached context if ensure_user_fleets didn't work
+      if (!gidToUse) {
+        const cachedGid = await loadFleetContext();
+        let reconciledGid = null;
+        try {
+          reconciledGid = await Promise.race([
+            reconcileGroupFromDeviceRow(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
+          ]);
+        } catch (e) {
+          console.log("reconcileGroup timed out or failed:", e?.message || e);
+        }
+        gidToUse = reconciledGid || cachedGid;
+        if (gidToUse) activeGroupIdRef.current = gidToUse; // ✅ Track active group
+      }
+
+      await fetchFleet(gidToUse);
+    } catch (e) {
+      console.log("boot error:", e?.message || e);
+      if (isMountedRef.current) setErrorText("Could not load fleet. Pull down to retry.");
+    } finally {
+      if (isMountedRef.current) setLoading(false);
     }
-
-    // Fall back to cached context if ensure_user_fleets didn't work
-    if (!gidToUse) {
-      const cachedGid = await loadFleetContext();
-      const reconciledGid = await reconcileGroupFromDeviceRow();
-      gidToUse = reconciledGid || cachedGid;
-      if (gidToUse) activeGroupIdRef.current = gidToUse; // ✅ Track active group
-    }
-
-    await fetchFleet(gidToUse);
-
-    if (isMountedRef.current) setLoading(false);
   }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow, ensureUserFleets]);
+
+  // ✅ Force retry boot (resets the boot guard so boot() can run again)
+  const retryBoot = useCallback(() => {
+    initialBootDoneRef.current = false;
+    setErrorText("");
+    boot();
+  }, [boot]);
 
   useEffect(() => {
     boot();
   }, [boot]);
+
+  // ✅ Safety timeout: if loading stays true for 12 seconds, force-stop and show retry
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      if (isMountedRef.current && loading) {
+        console.log("⚠️ Fleet loading safety timeout (12s)");
+        setLoading(false);
+        setErrorText("Loading timed out. Tap to retry.");
+      }
+    }, 12000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange(async (event) => {
@@ -1636,6 +1710,12 @@ export default function FleetScreen() {
       <View style={styles.centered}>
         <ActivityIndicator size="large" color="#22c55e" />
         <Text style={styles.loadingText}>Loading fleet…</Text>
+        <TouchableOpacity
+          style={{ marginTop: 24, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: "#334155", borderRadius: 8 }}
+          onPress={retryBoot}
+        >
+          <Text style={{ color: "#e2e8f0", fontSize: 13, fontWeight: "600" }}>Tap to retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -1731,7 +1811,7 @@ export default function FleetScreen() {
               <View style={styles.modalTitleRow}>
                 <Ionicons name="lock-closed" size={18} color="#e2e8f0" />
                 <Text style={styles.modalTitle}>
-                  {pinStep === 1 ? "Create Your SOS PIN" : "Confirm Your PIN"}
+                  {pinStep === 1 ? (hasPin ? "Change Your SOS PIN" : "Create Your SOS PIN") : "Confirm Your PIN"}
                 </Text>
               </View>
 
@@ -2059,9 +2139,15 @@ export default function FleetScreen() {
                   <Text style={styles.pinStatusText}>Checking...</Text>
                 </View>
               ) : hasPin ? (
-                <View style={styles.pinStatusRow}>
-                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
-                  <Text style={[styles.pinStatusText, { color: "#22c55e" }]}>PIN Configured</Text>
+                <View>
+                  <View style={styles.pinStatusRow}>
+                    <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                    <Text style={[styles.pinStatusText, { color: "#22c55e" }]}>PIN Configured</Text>
+                  </View>
+                  <TouchableOpacity style={[styles.pinSetupBtn, { backgroundColor: "#334155", marginTop: 8 }]} onPress={openPinModal} activeOpacity={0.85}>
+                    <Ionicons name="refresh-outline" size={16} color="#e2e8f0" />
+                    <Text style={[styles.pinSetupBtnText, { color: "#e2e8f0" }]}>CHANGE PIN</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
                 <TouchableOpacity style={styles.pinSetupBtn} onPress={openPinModal} activeOpacity={0.85}>
@@ -2072,13 +2158,17 @@ export default function FleetScreen() {
 
               <Text style={styles.pinWarning}>
                 ⚠️ IMPORTANT: Remember this PIN. It is the ONLY code that can unlock your phone during an emergency SOS.
-                {hasPin ? "" : " This PIN cannot be changed once set."}
               </Text>
             </>
           )}
         </View>
 
-        {!!errorText && <Text style={styles.errorText}>⚠ {errorText}</Text>}
+        {!!errorText && (
+          <TouchableOpacity onPress={retryBoot}>
+            <Text style={styles.errorText}>⚠ {errorText}</Text>
+            <Text style={[styles.errorText, { fontSize: 11, marginTop: 2 }]}>Tap to retry</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <FlatList

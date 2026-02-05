@@ -103,18 +103,45 @@ export default function ManagerDashboard() {
     }
   }, []);
 
-  // Initial load
+  // Initial load (with timeout to prevent infinite loading on expired auth)
   useEffect(() => {
     const init = async () => {
-      const ownerOk = await checkOwnership();
-      if (ownerOk) {
-        await fetchMemberLocations();
-      } else {
+      try {
+        let ownerOk = false;
+        try {
+          ownerOk = await Promise.race([
+            checkOwnership(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+          ]);
+        } catch (e) {
+          console.log("checkOwnership timed out or failed:", e?.message || e);
+          setError("Could not verify fleet ownership. Pull down to retry.");
+        }
+        if (ownerOk) {
+          await fetchMemberLocations();
+        }
+      } catch (e) {
+        console.log("Dashboard init error:", e?.message || e);
+        setError("Could not load dashboard. Pull down to retry.");
+      } finally {
         setLoading(false);
       }
     };
     init();
   }, [checkOwnership, fetchMemberLocations]);
+
+  // ✅ Safety timeout: if loading stays true for 12 seconds, force-stop
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      if (loading) {
+        console.log("⚠️ Dashboard loading safety timeout (12s)");
+        setLoading(false);
+        setError("Loading timed out. Pull down to retry.");
+      }
+    }, 12000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   // Auto-refresh when owner
   useEffect(() => {

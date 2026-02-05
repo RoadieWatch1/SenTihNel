@@ -25,14 +25,14 @@ import { supabase } from "../lib/supabase";
 // iOS: App Store app > Public API Key
 // Android: Play Store app > Public API Key
 const REVENUECAT_API_KEY_IOS = "appl_YOUR_IOS_KEY_HERE"; // TODO: Replace with real key
-const REVENUECAT_API_KEY_ANDROID = "goog_YOUR_ANDROID_KEY_HERE"; // TODO: Replace with real key
+const REVENUECAT_API_KEY_ANDROID = "goog_HFJETuXgmqZJIBmNLsfwwkheGUc";
 
 // Product IDs - Must match EXACTLY what you create in:
 // - App Store Connect (iOS): App > In-App Purchases
 // - Google Play Console (Android): App > Monetize > Products > Subscriptions
 export const PRODUCT_IDS = {
-  INDIVIDUAL_MONTHLY: "sentihnel_individual_monthly", // $6.99/month
-  INDIVIDUAL_YEARLY: "sentihnel_individual_yearly", // $59.99/year (save $24)
+  INDIVIDUAL_MONTHLY: "sentihnel_premium", // Monthly subscription (Google Play: SenTihNel Pro)
+  INDIVIDUAL_YEARLY: "sentihnel_individual_yearly", // Yearly subscription (Google Play: SenTihNel Yearly)
 };
 
 // Entitlement ID (RevenueCat Dashboard > Project > Entitlements)

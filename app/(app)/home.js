@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Linking,
   Vibration,
+  Alert,
   AppState,
   Modal,
   Pressable,
@@ -37,6 +38,9 @@ import {
 import FakeLockScreen from "../../src/components/FakeLockScreen";
 import { startLiveTracking } from "../../src/services/LiveTracker";
 import { getDeviceId as getStableDeviceId } from "../../src/services/Identity"; // ✅ Phase 1: single source of truth
+import { supabase } from "../../src/lib/supabase";
+
+import FloatingSOSButton from "../../src/services/FloatingSOSButton";
 
 // ✅ Must match Auth + LiveTracker key
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
@@ -46,6 +50,7 @@ const STORAGE_KEY_SOS = "sentinel_sos_active";
 
 const TAP_WINDOW_MS = 3000;
 const TAP_TARGET = 7;
+const STORAGE_KEY_OVERLAY_ASKED = "sentinel_overlay_asked";
 
 function isGranted(status) {
   return String(status || "").toLowerCase() === "granted";
@@ -74,6 +79,13 @@ export default function HomePage() {
   const [tapCount, setTapCount] = useState(0);
   const tapStartRef = useRef(0);
 
+  // ✅ Ref for triggerSOS (used by notification/floating button listener to avoid stale closure)
+  const triggerSOSRef = useRef(null);
+
+  // ✅ Floating SOS button state
+  const overlayPermRef = useRef(false); // Tracks overlay permission status
+  const appStateRef = useRef(AppState.currentState);
+
   // ✅ Check-In state
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [lastCheckIn, setLastCheckIn] = useState(null);
@@ -86,6 +98,9 @@ export default function HomePage() {
   const [sosStartTime, setSosStartTime] = useState(null);
   const [showPostSosReport, setShowPostSosReport] = useState(false);
   const [lastSosDuration, setLastSosDuration] = useState(null);
+
+  // ✅ PIN setup check - prevent SOS without a PIN
+  const [hasPin, setHasPin] = useState(null); // null = loading, true/false = known
 
   // ✅ Permission Gate State (prevents "silent tracking failure")
   const [permChecking, setPermChecking] = useState(false);
@@ -263,6 +278,14 @@ export default function HomePage() {
       setDeviceId(finalId);
       registerForBatSignal();
 
+      // ✅ Check if user has set up their SOS PIN
+      try {
+        const { data } = await supabase.rpc("has_user_sos_pin");
+        setHasPin(data?.has_pin === true);
+      } catch {
+        setHasPin(false);
+      }
+
       const ready = await refreshPermissionSnapshot();
 
       if (!ready) {
@@ -279,6 +302,17 @@ export default function HomePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permReady]);
+
+  // ✅ Re-check PIN status when screen comes into focus (e.g., after setting PIN on fleet page)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("focus", async () => {
+      try {
+        const { data } = await supabase.rpc("has_user_sos_pin");
+        setHasPin(data?.has_pin === true);
+      } catch {}
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   // ✅ Lock Android back button during SOS
   useEffect(() => {
@@ -309,6 +343,84 @@ export default function HomePage() {
     return () => unsubscribe();
   }, []);
 
+  // ✅ Stop floating button during SOS (not needed while FakeLockScreen is showing)
+  useEffect(() => {
+    if (isSOS) {
+      if (FloatingSOSButton.isAvailable) FloatingSOSButton.stop();
+    }
+  }, [isSOS]);
+
+  // ✅ Floating SOS button: listen for trigger events from the overlay
+  useEffect(() => {
+    if (!FloatingSOSButton.isAvailable) return;
+    const sub = FloatingSOSButton.addSOSTriggerListener(() => {
+      console.log("⚠️ SOS TRIGGERED from floating overlay button");
+      // Stop the floating button since app is now in foreground
+      FloatingSOSButton.stop();
+      if (triggerSOSRef.current) {
+        triggerSOSRef.current();
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  // ✅ Floating SOS button: show when app goes to background, hide when foreground
+  useEffect(() => {
+    if (!FloatingSOSButton.isAvailable) return;
+
+    const handleAppState = async (nextAppState) => {
+      const wasBackground = appStateRef.current?.match(/inactive|background/);
+      appStateRef.current = nextAppState;
+
+      if (nextAppState === "active") {
+        // App came to foreground — hide floating button
+        FloatingSOSButton.stop();
+
+        // Backup: check SOS flag in case event didn't fire
+        const triggered = await FloatingSOSButton.checkSOSFlag();
+        if (triggered && triggerSOSRef.current) {
+          console.log("⚠️ SOS TRIGGERED from floating button (flag fallback)");
+          triggerSOSRef.current();
+        }
+      } else if (nextAppState === "background" && permReady && !isSOS) {
+        // App went to background — show floating button (if permission granted)
+        FloatingSOSButton.start();
+      }
+    };
+
+    const sub = AppState.addEventListener("change", handleAppState);
+    return () => sub.remove();
+  }, [permReady, isSOS]);
+
+  // ✅ Floating SOS button: request overlay permission once (after permissions are ready)
+  useEffect(() => {
+    if (!FloatingSOSButton.isAvailable || !permReady) return;
+
+    (async () => {
+      const hasOverlay = await FloatingSOSButton.checkPermission();
+      overlayPermRef.current = hasOverlay;
+
+      if (!hasOverlay) {
+        // Check if we've asked before
+        const asked = await AsyncStorage.getItem(STORAGE_KEY_OVERLAY_ASKED);
+        if (!asked) {
+          await AsyncStorage.setItem(STORAGE_KEY_OVERLAY_ASKED, "1");
+          Alert.alert(
+            "Enable Quick Access",
+            "Allow SenTihNel to show a floating button over other apps. This lets you trigger an emergency alert even when the app is in the background.",
+            [
+              { text: "Not Now", style: "cancel" },
+              {
+                text: "Enable",
+                onPress: () => FloatingSOSButton.requestPermission(),
+              },
+            ]
+          );
+        }
+      }
+    })();
+  }, [permReady]);
+
   // ✅ Updated triggerSOS to accept optional wake word parameter
   const triggerSOS = (detectedPhrase) => {
     if (deviceId === "Loading..." || deviceId === "Unavailable") return;
@@ -316,6 +428,22 @@ export default function HomePage() {
     if (!permReady) {
       console.log("🟡 SOS blocked: permissions not ready. Requesting now...");
       requestAllPermissions();
+      return;
+    }
+
+    // ✅ Block SOS if user hasn't set up a PIN yet
+    if (!hasPin) {
+      Alert.alert(
+        "Set Up Your PIN First",
+        "You need to create an SOS PIN before activating the panic button. This PIN is required to deactivate the SOS alert.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Set Up PIN",
+            onPress: () => navigation.navigate("fleet"),
+          },
+        ]
+      );
       return;
     }
 
@@ -338,6 +466,11 @@ export default function HomePage() {
     }, 1200);
   };
 
+  // ✅ Keep triggerSOS ref in sync for notification listener
+  useEffect(() => {
+    triggerSOSRef.current = triggerSOS;
+  });
+
   // ✅ Wake word status handler (for debugging/UI feedback)
   const handleWakeWordStatus = (status) => {
     console.log("🎤 Wake word status:", status);
@@ -345,6 +478,7 @@ export default function HomePage() {
   };
 
   const disarmSOS = () => {
+    console.log("🟢 disarmSOS: Deactivating SOS UI...");
     // ✅ Calculate SOS duration and show report
     if (sosStartTime) {
       const duration = Math.round((Date.now() - sosStartTime) / 1000);
@@ -353,6 +487,8 @@ export default function HomePage() {
     }
     setIsSOS(false);
     setSosStartTime(null);
+    // ✅ Also clear AsyncStorage SOS flag as safety measure
+    AsyncStorage.setItem(STORAGE_KEY_SOS, "0").catch(() => {});
   };
 
   const formatDuration = (seconds) => {
