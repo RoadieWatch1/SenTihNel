@@ -245,6 +245,10 @@ async function ensureFreshSessionForEmail(targetEmail) {
         targetEmail: clean,
       });
 
+      // ✅ Stop refresh timer before signing out
+      globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+      try { supabase.auth.stopAutoRefresh(); } catch {}
+
       try {
         await supabase.auth.signOut({ scope: "local" });
       } catch {
@@ -644,6 +648,10 @@ export default function AuthPage() {
   const signOutAndClear = async () => {
     try {
       setLoading(true);
+
+      // ✅ Stop refresh timer before signing out
+      globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+      try { supabase.auth.stopAutoRefresh(); } catch {}
 
       // ✅ get uid BEFORE signout (after signout you won't have it)
       const before = await getServerUserIdentity();

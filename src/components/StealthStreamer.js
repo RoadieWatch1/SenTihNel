@@ -3,10 +3,33 @@ import React, { useRef, useEffect, useState, useMemo } from "react";
 import { View, Text, PermissionsAndroid, Platform, StyleSheet } from "react-native";
 import * as Location from "expo-location";
 import Constants from "expo-constants";
-import { supabase } from "../lib/supabase"; // ✅ uses your existing singleton client
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../lib/supabase";
 
-// 🔴 CONFIGURATION
-const APP_ID = "5478104d15af4128a42f0b6b59f87ef3";
+// Agora APP_ID is fetched from the token server at runtime.
+// Fallback used only during migration (before App Certificate is enforced).
+const AGORA_APP_ID_FALLBACK = "5478104d15af4128a42f0b6b59f87ef3";
+
+async function fetchAgoraToken(channelId, role = "publisher") {
+  const { data: { session } } = await supabase.auth.getSession();
+  const jwt = session?.access_token;
+  if (!jwt) throw new Error("No auth session for Agora token");
+
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${jwt}`,
+    },
+    body: JSON.stringify({ device_id: channelId, uid: 0, role }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
+  }
+  return await res.json();
+}
 
 /**
  * StealthStreamer
@@ -228,11 +251,16 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
     if (initLockRef.current) return;
     initLockRef.current = true;
 
-    if (!APP_ID) {
-      console.error("❌ MISSING AGORA APP ID! Video will not work.");
-      setEngineState("error");
-      initLockRef.current = false;
-      return;
+    // Fetch Agora token from server (falls back to null if unavailable)
+    let agoraToken = null;
+    let appId = AGORA_APP_ID_FALLBACK;
+    try {
+      const tokenData = await fetchAgoraToken(channelId, "publisher");
+      agoraToken = tokenData.token;
+      appId = tokenData.app_id || appId;
+      console.log("✅ Agora token fetched for channel:", channelId);
+    } catch (e) {
+      console.warn("⚠️ Agora token fetch failed, falling back to null token:", e?.message);
     }
 
     if (!channelId) {
@@ -283,7 +311,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
 
       // B) Setup the Engine
       agoraEngine.current = createAgoraRtcEngine();
-      agoraEngine.current.initialize({ appId: APP_ID });
+      agoraEngine.current.initialize({ appId });
 
       agoraEngine.current.registerEventHandler({
         onJoinChannelSuccess: async (_connection, uid) => {
@@ -322,19 +350,45 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         onUserJoined: (_connection, uid) => {
           console.log("👀 GUARDIAN IS WATCHING (Remote user joined):", uid);
         },
+
+        // Token renewal: Agora fires this ~30s before token expiry
+        onTokenPrivilegeWillExpire: async () => {
+          console.log("🔄 Agora token expiring, renewing...");
+          try {
+            const tokenData = await fetchAgoraToken(channelId, "publisher");
+            if (agoraEngine.current && typeof agoraEngine.current.renewToken === "function") {
+              agoraEngine.current.renewToken(tokenData.token);
+              console.log("✅ Agora token renewed");
+            }
+          } catch (e) {
+            console.error("❌ Agora token renewal failed:", e?.message);
+          }
+        },
+
+        // Monitor connection state for better error recovery
+        onConnectionStateChanged: (_connection, state, reason) => {
+          console.log(`📡 Agora connection: state=${state} reason=${reason}`);
+          if (!mountedRef.current) return;
+          // State 5 = FAILED — connection unrecoverable
+          if (state === 5) {
+            console.error("❌ Agora connection FAILED — attempting rejoin...");
+            setEngineState("error");
+            initLockRef.current = false;
+          }
+        },
       });
 
       // C) Configure for Live Broadcasting
       agoraEngine.current.setChannelProfile(ChannelProfileType.ChannelProfileLiveBroadcasting);
       agoraEngine.current.setClientRole(ClientRoleType.ClientRoleBroadcaster);
 
-      // Stronger encoder defaults (stability > max quality)
+      // ✅ FIX: Improved encoder settings (was 640x360/15fps/650kbps — too conservative, caused loading/jumping)
       try {
         if (typeof agoraEngine.current.setVideoEncoderConfiguration === "function") {
           await agoraEngine.current.setVideoEncoderConfiguration({
-            dimensions: { width: 640, height: 360 },
-            frameRate: 15,
-            bitrate: 650,
+            dimensions: { width: 960, height: 540 },
+            frameRate: 24,
+            bitrate: 1200,
           });
         }
       } catch {}
@@ -391,10 +445,8 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         await applyCameraFacing(defaultFacing);
       } catch {}
 
-      // D) Join the channel
-      // NOTE: token=null works only if your Agora project doesn't require tokens.
-      // If you enabled App Certificate / tokens, dashboard will NOT see video unless you provide a token.
-      agoraEngine.current.joinChannel(null, channelId, 0, {});
+      // D) Join the channel with server-issued token (or null during migration)
+      await agoraEngine.current.joinChannel(agoraToken, channelId, 0, {});
     } catch (e) {
       console.error("❌ INIT ERROR:", e);
       if (mountedRef.current) setEngineState("error");

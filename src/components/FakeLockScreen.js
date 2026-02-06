@@ -31,8 +31,11 @@ const hashPin = (pin) => {
 };
 
 // ✅ Hard timeout so UI never gets stuck
-const CANCEL_TIMEOUT_MS = 4000;
-const PIN_VERIFY_TIMEOUT_MS = 3000; // Timeout for Supabase PIN check
+// ✅ FIX: Increased from 4000 to 6000ms to give broadcast cancel time to reach fleet
+const CANCEL_TIMEOUT_MS = 6000;
+// ✅ FIX: Increased from 3000 to 8000ms — during SOS the network is saturated
+// (video streaming, GPS syncs, cloud recording) so RPC needs more time
+const PIN_VERIFY_TIMEOUT_MS = 8000;
 
 export default function FakeLockScreen({ onUnlock }) {
   const [pin, setPin] = useState("");
@@ -125,6 +128,10 @@ export default function FakeLockScreen({ onUnlock }) {
 
       if (!error && data?.valid === true) {
         isValid = true;
+        // ✅ FIX: Cache PIN hash locally so it works offline / when RPC times out
+        try {
+          await AsyncStorage.setItem("sentinel_pin_hash", hashed);
+        } catch {}
       } else if (data?.error === "No PIN set") {
         isValid = (inputPin === FALLBACK_CODE);
       }

@@ -45,7 +45,6 @@ function AuthGate() {
     let isMounted = true;
 
     const safeReplace = (path) => {
-      // avoid hammering the same route
       if (lastRouteRef.current === path) return;
       if (didRedirectRef.current) return;
 
@@ -59,8 +58,36 @@ function AuthGate() {
       }, 450);
     };
 
+    const stopRefreshAndClearAuth = async () => {
+      globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+
+      try {
+        supabase.auth.stopAutoRefresh();
+      } catch {}
+
+      // ✅ MUST match storageKey in supabase.js EXACTLY
+      try {
+        await AsyncStorage.removeItem("sentihnel.auth");
+      } catch {}
+
+      // ✅ Local signout (don't spam server if token is dead)
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch {}
+    };
+
     const getSession = async () => {
-      const { data } = await supabase.auth.getSession();
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.log(
+          "⚠️ AuthGate: Stale session detected — signing out:",
+          error.message
+        );
+        await stopRefreshAndClearAuth();
+        return null;
+      }
+
       return data?.session ?? null;
     };
 
@@ -107,7 +134,6 @@ function AuthGate() {
     };
 
     const clearSensitiveStorage = async () => {
-      // ✅ IMPORTANT: do NOT clear sentinel_device_id here.
       await AsyncStorage.multiRemove([
         STORAGE_KEY_GROUP_ID,
         STORAGE_KEY_INVITE_CODE,
@@ -117,14 +143,12 @@ function AuthGate() {
     };
 
     const resetGateState = () => {
-      // resets throttles so next login handshake happens immediately
       lastHandshakeKeyRef.current = "";
       lastHandshakeAtRef.current = 0;
       lastRouteRef.current = "";
       didRedirectRef.current = false;
     };
 
-    // ✅ Phase 1: ensure devices row is aligned when logged in + has fleet
     const maybeHandshake = async (session, groupId) => {
       try {
         const userId = session?.user?.id;
@@ -133,7 +157,6 @@ function AuthGate() {
         const key = `${String(userId)}:${String(groupId)}`;
         const now = Date.now();
 
-        // throttle (prevents repeated calls during router transitions)
         if (
           lastHandshakeKeyRef.current === key &&
           now - lastHandshakeAtRef.current < 15_000
@@ -171,6 +194,10 @@ function AuthGate() {
           return;
         }
 
+        // ✅ Enable refresh behavior ONLY AFTER session is confirmed valid
+        globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = true;
+        supabase.auth.startAutoRefresh();
+
         // ✅ Logged in -> must have fleet before entering app
         const { hasFleet, groupId } = await ensureFleetOrSetup(session);
 
@@ -179,7 +206,7 @@ function AuthGate() {
           return;
         }
 
-        // ✅ Handshake on boot when session + fleet exist
+        // ✅ Handshake on boot
         await maybeHandshake(session, groupId);
 
         // ✅ Logged in + has fleet -> must be in app
@@ -199,11 +226,16 @@ function AuthGate() {
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (!session) {
+          globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+          try { supabase.auth.stopAutoRefresh(); } catch {}
           await clearSensitiveStorage();
           resetGateState();
           safeReplace("/(auth)/auth");
           return;
         }
+
+        globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = true;
+        supabase.auth.startAutoRefresh();
 
         const { hasFleet, groupId } = await ensureFleetOrSetup(session);
 
@@ -212,7 +244,6 @@ function AuthGate() {
           return;
         }
 
-        // ✅ Handshake after auth restore/sign-in too
         await maybeHandshake(session, groupId);
 
         safeReplace("/(app)/home");

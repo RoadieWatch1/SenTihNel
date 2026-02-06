@@ -15,7 +15,9 @@ import AlarmService from "../../src/services/AlarmService";
 
 function CustomDrawerContent(props) {
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+    try { supabase.auth.stopAutoRefresh(); } catch {}
+    await supabase.auth.signOut({ scope: "local" });
     // Root AuthGate will route user to /(auth)/auth
   };
 
@@ -33,7 +35,7 @@ function CustomDrawerContent(props) {
             <View style={styles.statusDot} />
             <Text style={styles.statusText}>SHIELD ACTIVE</Text>
           </View>
-          <Text style={styles.version}>v1.0.2</Text>
+          <Text style={styles.version}>v1.0.0</Text>
         </View>
       </View>
 

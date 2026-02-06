@@ -1114,7 +1114,12 @@
 
   <script>
     // 🔴 CONFIGURATION
-    const APP_ID = '5478104d15af4128a42f0b6b59f87ef3';
+    // TODO: PRODUCTION — Ensure strict RLS policies on all tables.
+    // The anon key below is safe ONLY if RLS restricts queries to the logged-in user's fleets/members.
+    // Without RLS, anyone with this key can query all fleets.
+    // Agora APP_ID fetched from token server. Fallback used during migration only.
+    const AGORA_APP_ID_FALLBACK = '5478104d15af4128a42f0b6b59f87ef3';
+    let AGORA_APP_ID = null;
     const SUPABASE_URL = 'https://yjnqyzozvrgajavndgbm.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqbnF5em96dnJnYWphdm5kZ2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3Mzk3MjksImV4cCI6MjA4MzMxNTcyOX0.8y7bbX4blhyDxZylhkfKQmgU5TfG2xWs51rSVSl-Bnw';
 
@@ -1151,6 +1156,9 @@
     const FINAL_STYLE_ORDER = STYLE_OVERRIDE ? [STYLE_OVERRIDE, ...STYLE_ORDER] : [...STYLE_ORDER];
 
     // --- Police scanning tuning ---
+    // TODO: PRODUCTION — Proxy Overpass through your own API with caching + backoff.
+    // Direct calls to public Overpass endpoints will get rate-limited or fail during
+    // real emergencies when you need them most.
     const POLICE_SCAN_RADIUS_M = 50000;
     const POLICE_MAX_RESULTS = 6;
 
@@ -1188,7 +1196,7 @@
     let cameraUid = null;
 
     // Only front camera is displayed
-    const activeCam = 'front';
+    let activeCam = 'front';
 
     // Watchdog (freeze recovery)
     let freezeTimer = null;
@@ -1198,7 +1206,52 @@
     let rejoinAttempt = 0;
 
     const { createClient } = supabase;
-    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    });
+
+    // ✅ Session management: handle token refresh failures and sign-outs
+    db.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' && !session) {
+        console.warn('Auth: Token refresh failed — session expired');
+        handleLogout();
+      }
+      if (event === 'SIGNED_OUT') {
+        // Another tab/window signed out
+        if (currentUser) {
+          currentUser = null;
+          document.getElementById('login-overlay').classList.remove('hidden');
+        }
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // AGORA TOKEN
+    // ═══════════════════════════════════════════════════════════════
+    async function fetchAgoraToken(deviceId, role = 'subscriber') {
+      const { data: { session } } = await db.auth.getSession();
+      if (!session?.access_token) throw new Error('Not authenticated');
+
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ device_id: deviceId, uid: 0, role }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
+      }
+      return await res.json();
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // AUTH FUNCTIONS
@@ -1275,15 +1328,31 @@
     async function handleLogout() {
       try {
         await db.auth.signOut();
-      } catch (e) {}
+      } catch (e) {
+        console.warn('Logout signOut error:', e);
+      }
 
       currentUser = null;
       currentFleetId = null;
       userFleets = [];
       fleetMembers = [];
       activeSOSList = [];
+      selectedSOSDeviceId = null;
 
-      // Clean up subscriptions
+      // Clean up Agora video
+      await safeLeaveAgora();
+      camTracks.front = null;
+      remoteAudioTrack = null;
+      audioUnmuted = false;
+
+      // Stop any active recording
+      if (isRecording && mediaRecorder) {
+        try { mediaRecorder.stop(); } catch (e) {}
+        isRecording = false;
+        if (recInterval) { clearInterval(recInterval); recInterval = null; }
+      }
+
+      // Clean up Supabase subscriptions
       if (fleetChannel) {
         try { db.removeChannel(fleetChannel); } catch (e) {}
         fleetChannel = null;
@@ -1297,23 +1366,41 @@
       Object.values(memberMarkers).forEach(m => { try { m.remove(); } catch (e) {} });
       memberMarkers = {};
 
+      // Clear main marker
+      if (marker) {
+        try { marker.remove(); } catch (e) {}
+        marker = null;
+        markerEl = null;
+      }
+
       document.getElementById('login-overlay').classList.remove('hidden');
     }
 
     async function onAuthSuccess() {
       document.getElementById('login-overlay').classList.add('hidden');
       await loadUserFleets();
+
+      // If URL has a direct device link, set up tracking after auth
+      if (DEVICE_ID) {
+        setupDirectDeviceTracking();
+      }
     }
 
     async function checkExistingSession() {
       try {
-        const { data: { session } } = await db.auth.getSession();
+        const { data: { session }, error } = await db.auth.getSession();
+        if (error) {
+          console.warn('Session check failed:', error.message);
+          return false;
+        }
         if (session && session.user) {
           currentUser = session.user;
           await onAuthSuccess();
           return true;
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn('Session check error:', e);
+      }
       return false;
     }
 
@@ -1999,11 +2086,12 @@
       const hasSession = await checkExistingSession();
 
       if (!hasSession) {
-        // Show login overlay
+        // Show login overlay — user must authenticate first
         document.getElementById('login-overlay').classList.remove('hidden');
+        return;
       }
 
-      // If URL has device ID (direct link), still set up tracking for it
+      // Only set up direct device tracking AFTER auth is confirmed
       if (DEVICE_ID) {
         setupDirectDeviceTracking();
       }
@@ -2021,20 +2109,22 @@
               if (row) updatePosition(row);
             }
           )
-          .subscribe();
+          .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              console.log('Direct device tracking connected for', DEVICE_ID);
+            }
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              console.warn('Direct device tracking failed:', status);
+            }
+          });
 
         fetchLastPosition();
-      } catch (e) {}
+      } catch (e) {
+        console.error('setupDirectDeviceTracking error:', e);
+      }
     }
 
-    // Old direct tracking (now handled in initApp)
-    if (DEVICE_ID && !currentUser) {
-      // Direct link mode - skip login requirement
-      document.getElementById('login-overlay').classList.add('hidden');
-      setupDirectDeviceTracking();
-    }
-
-    // Initialize app
+    // Initialize app (handles auth check + direct link tracking)
     initApp();
 
     async function fetchLastPosition() {
@@ -2045,8 +2135,14 @@
           .eq('device_id', DEVICE_ID)
           .maybeSingle();
 
-        if (!error && data) updatePosition(data);
-      } catch (e) {}
+        if (error) {
+          console.warn('fetchLastPosition query error:', error.message);
+          return;
+        }
+        if (data) updatePosition(data);
+      } catch (e) {
+        console.warn('fetchLastPosition error:', e);
+      }
     }
 
     function normalizeStatus(s) {
@@ -2434,6 +2530,19 @@
     async function createAndJoinAgora() {
       if (!DEVICE_ID) return;
 
+      // Fetch server-issued token (falls back to null during migration)
+      let agoraToken = null;
+      try {
+        const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber');
+        agoraToken = tokenData.token;
+        AGORA_APP_ID = tokenData.app_id;
+        console.log('Agora token fetched for:', DEVICE_ID);
+      } catch (e) {
+        console.warn('Agora token fetch failed, falling back to null token:', e.message);
+      }
+
+      const appId = AGORA_APP_ID || AGORA_APP_ID_FALLBACK;
+
       agoraClient = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
       agoraClient.setClientRole("audience");
 
@@ -2486,7 +2595,9 @@
             }
             updateAudioButton();
           }
-        } catch (e) {}
+        } catch (e) {
+          console.warn('Agora subscribe/play error:', e);
+        }
       });
 
       agoraClient.on("user-unpublished", (user, mediaType) => {
@@ -2508,7 +2619,19 @@
         }
       });
 
-      await agoraClient.join(APP_ID, DEVICE_ID, null, null);
+      // Token renewal: Agora fires this ~30s before expiry
+      agoraClient.on('token-privilege-will-expire', async () => {
+        console.log('Agora token expiring, renewing...');
+        try {
+          const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber');
+          await agoraClient.renewToken(tokenData.token);
+          console.log('Agora token renewed');
+        } catch (e) {
+          console.warn('Agora token renewal failed:', e.message);
+        }
+      });
+
+      await agoraClient.join(appId, DEVICE_ID, agoraToken, null);
 
       // Join success — start watchdog
       startFreezeWatchdog();
@@ -2529,9 +2652,17 @@
     }
 
     async function safeLeaveAgora() {
+      // Clear freeze watchdog to prevent memory leak
+      if (freezeTimer) {
+        clearInterval(freezeTimer);
+        freezeTimer = null;
+      }
+      freezeStallCount = 0;
+      freezeLastTime = -1;
+
       try { if (agoraClient) await agoraClient.leave(); } catch {}
       try { if (agoraClient) agoraClient.removeAllListeners(); } catch {}
-      try { if (agoraClient) agoraClient = null; } catch {}
+      agoraClient = null;
     }
 
     function scheduleRejoin() {
@@ -2650,9 +2781,15 @@
       }
     }
 
+    // TODO: PRODUCTION — Proxy Nominatim through your own API with caching.
+    // Direct calls will get rate-limited under load (especially during real emergencies).
     async function fetchLocationName(lat, lng) {
       try {
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+        if (!res.ok) {
+          console.warn('Nominatim reverse geocode failed:', res.status);
+          return;
+        }
         const d = await res.json();
 
         const city =
@@ -2664,7 +2801,9 @@
 
         const line = [city, state, country].filter(Boolean).join(', ');
         setBottomStrip(`${String(line || 'UNKNOWN SECTOR').toUpperCase()} • LIVE VIEW`);
-      } catch(e) {}
+      } catch(e) {
+        // Nominatim may be rate-limited — non-fatal
+      }
     }
 
     // ----------------------------

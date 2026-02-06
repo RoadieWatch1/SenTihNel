@@ -2,6 +2,11 @@
 // Central manager for SOS alerts across the app
 // Coordinates alarm, notifications, and UI overlay
 // Works on both iOS and Android
+//
+// ✅ FIX: Broadcast listeners on fleet:{groupId} channel (must match BatSignal sender)
+// ✅ FIX: postgres_changes on SEPARATE db_watch channel (non-fatal if it fails)
+// ✅ FIX: Added retry on CHANNEL_ERROR with backoff
+// ✅ FIX: Check for resolved alerts when app resumes from background
 
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -16,6 +21,10 @@ import NotificationService from "./NotificationService";
 const ACTIVE_SOS_KEY = "sentinel_active_sos";
 const MY_DEVICE_ID_KEY = "sentinel_device_id";
 
+// ✅ FIX: Retry config for channel connection
+const MAX_CHANNEL_RETRIES = 5;
+const INITIAL_RETRY_DELAY_MS = 2000;
+
 // ============================================
 // STATE
 // ============================================
@@ -23,7 +32,10 @@ const MY_DEVICE_ID_KEY = "sentinel_device_id";
 let isInitialized = false;
 let currentGroupId = null;
 let myDeviceId = null;
-let realtimeChannel = null;
+let realtimeChannel = null; // Broadcast channel (critical — must always work)
+let dbWatchChannel = null; // Postgres changes channel (optional — best-effort backup)
+let channelRetryTimer = null;
+let channelRetryCount = 0;
 let appStateSubscription = null;
 let notificationSubscriptions = [];
 
@@ -67,11 +79,10 @@ async function initialize(groupId, deviceId, callbacks = {}) {
     await NotificationService.savePushTokenToSupabase(pushToken, myDeviceId, groupId);
   }
 
-  // Subscribe to realtime SOS broadcasts
-  subscribeToSOSBroadcasts(groupId);
-
-  // Subscribe to tracking_sessions changes for SOS status
-  subscribeToSOSStatusChanges(groupId);
+  // ✅ FIX: Subscribe to broadcast events (critical) and DB changes (optional backup)
+  // These are on SEPARATE channels so a postgres_changes failure can't kill broadcast reception
+  subscribeToRealtimeChannel(groupId);
+  subscribeToDbWatchChannel(groupId);
 
   // Listen for app state changes
   setupAppStateListener();
@@ -92,10 +103,26 @@ async function initialize(groupId, deviceId, callbacks = {}) {
 async function cleanup() {
   console.log("SOSAlertManager: Cleaning up");
 
-  // Remove realtime channel
+  // Clear retry timer
+  if (channelRetryTimer) {
+    clearTimeout(channelRetryTimer);
+    channelRetryTimer = null;
+  }
+  channelRetryCount = 0;
+
+  // Remove realtime channels
   if (realtimeChannel) {
-    await supabase.removeChannel(realtimeChannel);
+    try {
+      await supabase.removeChannel(realtimeChannel);
+    } catch {}
     realtimeChannel = null;
+  }
+
+  if (dbWatchChannel) {
+    try {
+      await supabase.removeChannel(dbWatchChannel);
+    } catch {}
+    dbWatchChannel = null;
   }
 
   // Remove app state subscription
@@ -119,13 +146,17 @@ async function cleanup() {
 // ============================================
 
 /**
- * Subscribe to SOS broadcasts on the fleet channel
- * Uses same channel as BatSignal.js: fleet:${groupId}
+ * ✅ FIX: Subscribe to broadcast events ONLY on the main channel
+ * - MUST use same channel name as BatSignal sender (fleet:{groupId}) for broadcasts to work
+ * - postgres_changes is on a SEPARATE channel so it can't take down broadcasts if it fails
+ * - Retries on CHANNEL_ERROR with backoff
  */
-function subscribeToSOSBroadcasts(groupId) {
+function subscribeToRealtimeChannel(groupId) {
+  // MUST match the channel name used in BatSignal.js tryBroadcastSOS/tryBroadcastCancel
   const channelName = `fleet:${groupId}`;
 
-  realtimeChannel = supabase
+  // Build channel with ONLY broadcast listeners (no postgres_changes)
+  const channel = supabase
     .channel(channelName)
     .on("broadcast", { event: "sos" }, (payload) => {
       handleSOSBroadcast(payload.payload);
@@ -135,43 +166,115 @@ function subscribeToSOSBroadcasts(groupId) {
     })
     .on("broadcast", { event: "sos_acknowledge" }, (payload) => {
       handleSOSAcknowledgeBroadcast(payload.payload);
-    })
-    .subscribe((status) => {
-      console.log("SOSAlertManager: Broadcast channel status:", status);
     });
+
+  // Subscribe with retry logic
+  channel.subscribe((status) => {
+    console.log("SOSAlertManager: Broadcast channel status:", status);
+
+    if (status === "SUBSCRIBED") {
+      console.log("SOSAlertManager: Broadcast channel connected successfully");
+      channelRetryCount = 0; // Reset on success
+    }
+
+    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+      console.log("SOSAlertManager: Broadcast channel failed, will retry...");
+      scheduleChannelRetry(groupId);
+    }
+  });
+
+  realtimeChannel = channel;
 }
 
 /**
- * Subscribe to tracking_sessions table for SOS status changes
- * This catches SOS triggers even if broadcast is missed
+ * ✅ Subscribe to postgres_changes on a SEPARATE channel (best-effort backup)
+ * If this fails (e.g., Realtime not enabled on tracking_sessions table), the broadcast
+ * channel keeps working. This is just an extra safety net for catching SOS status changes
+ * that happen via direct DB writes (not through broadcast).
  */
-function subscribeToSOSStatusChanges(groupId) {
-  // This is handled by the broadcast channel primarily
-  // But we also listen to postgres changes as a backup
-  if (realtimeChannel) {
-    realtimeChannel.on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "tracking_sessions",
-        filter: `group_id=eq.${groupId}`,
-      },
-      (payload) => {
-        const { new: newRow, old: oldRow } = payload;
+function subscribeToDbWatchChannel(groupId) {
+  // Use a different channel name so it doesn't conflict with the broadcast channel
+  const channelName = `db_watch:${groupId}`;
 
-        // Check if status changed to SOS
-        if (newRow.status === "SOS" && oldRow?.status !== "SOS") {
-          handleSOSStatusChange(newRow);
-        }
+  try {
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "tracking_sessions",
+          filter: `group_id=eq.${groupId}`,
+        },
+        (payload) => {
+          const { new: newRow, old: oldRow } = payload;
 
-        // Check if status changed from SOS (cancelled)
-        if (oldRow?.status === "SOS" && newRow.status !== "SOS") {
-          handleSOSCancelledStatusChange(newRow);
+          // Check if status changed to SOS
+          if (newRow.status === "SOS" && oldRow?.status !== "SOS") {
+            handleSOSStatusChange(newRow);
+          }
+
+          // Check if status changed from SOS (cancelled)
+          if (oldRow?.status === "SOS" && newRow.status !== "SOS") {
+            handleSOSCancelledStatusChange(newRow);
+          }
         }
+      );
+
+    channel.subscribe((status) => {
+      console.log("SOSAlertManager: DB watch channel status:", status);
+
+      if (status === "SUBSCRIBED") {
+        console.log("SOSAlertManager: DB watch channel connected (backup active)");
       }
-    );
+
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        // Non-fatal: broadcast channel is the primary, this is just a backup
+        console.log("SOSAlertManager: DB watch channel failed (non-fatal, broadcast still active)");
+      }
+    });
+
+    dbWatchChannel = channel;
+  } catch (e) {
+    // Complete failure is non-fatal — broadcast handles the critical path
+    console.log("SOSAlertManager: DB watch setup failed (non-fatal):", e?.message || e);
   }
+}
+
+/**
+ * ✅ FIX: Retry channel connection with exponential backoff
+ */
+function scheduleChannelRetry(groupId) {
+  if (channelRetryCount >= MAX_CHANNEL_RETRIES) {
+    console.log("SOSAlertManager: Max retries reached, will retry on next app resume");
+    return;
+  }
+
+  // Clear any existing timer
+  if (channelRetryTimer) {
+    clearTimeout(channelRetryTimer);
+  }
+
+  const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, channelRetryCount);
+  channelRetryCount++;
+
+  console.log(`SOSAlertManager: Retrying channel in ${delay}ms (attempt ${channelRetryCount}/${MAX_CHANNEL_RETRIES})`);
+
+  channelRetryTimer = setTimeout(async () => {
+    // Remove old channel
+    if (realtimeChannel) {
+      try {
+        await supabase.removeChannel(realtimeChannel);
+      } catch {}
+      realtimeChannel = null;
+    }
+
+    // Re-subscribe
+    if (currentGroupId === groupId) {
+      subscribeToRealtimeChannel(groupId);
+    }
+  }, delay);
 }
 
 // ============================================
@@ -314,6 +417,33 @@ function setupAppStateListener() {
 
     if (nextState === "active") {
       // App came to foreground
+      // ✅ FIX: Re-check database for SOS status changes we may have missed while backgrounded
+      // This catches both new SOS alerts AND cancellations that happened while offline
+      if (currentGroupId) {
+        await checkForActiveSOSAlerts(currentGroupId);
+        await checkForResolvedAlerts(currentGroupId);
+      }
+
+      // ✅ FIX: If channel was in error state, retry connection on app resume
+      if (channelRetryCount >= MAX_CHANNEL_RETRIES && currentGroupId) {
+        console.log("SOSAlertManager: Retrying channels on app resume");
+        channelRetryCount = 0; // Reset counter
+        if (realtimeChannel) {
+          try {
+            await supabase.removeChannel(realtimeChannel);
+          } catch {}
+          realtimeChannel = null;
+        }
+        if (dbWatchChannel) {
+          try {
+            await supabase.removeChannel(dbWatchChannel);
+          } catch {}
+          dbWatchChannel = null;
+        }
+        subscribeToRealtimeChannel(currentGroupId);
+        subscribeToDbWatchChannel(currentGroupId);
+      }
+
       // Check if there are active SOS alerts
       if (activeSOSAlerts.size > 0) {
         // Start alarm for any active alerts
@@ -434,9 +564,56 @@ async function checkForActiveSOSAlerts(groupId) {
           });
         }
       }
+    } else {
+      // ✅ No active SOS in DB — if we have local alerts, they're stale
+      if (activeSOSAlerts.size > 0) {
+        console.log("SOSAlertManager: No SOS in DB but", activeSOSAlerts.size, "local alerts — clearing stale alerts");
+        activeSOSAlerts.clear();
+        await saveActiveAlerts();
+        await AlarmService.stopAlarm();
+      }
     }
   } catch (e) {
     console.log("SOSAlertManager: Error checking active SOS", e);
+  }
+}
+
+/**
+ * ✅ FIX: Check if any active SOS alerts have been resolved while app was backgrounded
+ * This catches cancel events that were missed because the WebSocket was inactive
+ */
+async function checkForResolvedAlerts(groupId) {
+  try {
+    if (activeSOSAlerts.size === 0) return;
+
+    // Query current SOS statuses for all devices we think are in SOS
+    const activeDeviceIds = Array.from(activeSOSAlerts.keys());
+    const { data, error } = await supabase
+      .from('tracking_sessions_with_name')
+      .select("device_id, status, display_name")
+      .eq("group_id", groupId)
+      .in("device_id", activeDeviceIds);
+
+    if (error) {
+      console.log("SOSAlertManager: Failed to check resolved alerts", error);
+      return;
+    }
+
+    // Find devices that are no longer in SOS
+    const stillSOS = new Set((data || []).filter(r => r.status === "SOS").map(r => r.device_id));
+
+    for (const deviceId of activeDeviceIds) {
+      if (!stillSOS.has(deviceId)) {
+        console.log("SOSAlertManager: Alert resolved while backgrounded for", deviceId);
+        const alertData = activeSOSAlerts.get(deviceId);
+        await handleSOSCancelBroadcast({
+          device_id: deviceId,
+          display_name: alertData?.display_name || null,
+        });
+      }
+    }
+  } catch (e) {
+    console.log("SOSAlertManager: Error checking resolved alerts", e);
   }
 }
 

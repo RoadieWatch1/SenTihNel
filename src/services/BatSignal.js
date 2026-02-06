@@ -63,7 +63,9 @@ const CLOUDREC_MAX_ATTEMPTS = 6; // ~6 attempts
 const CLOUDREC_RETRY_DELAY_MS = 4000; // every 4s
 
 // ✅ Safety timeouts (so UI never hangs)
-const CANCEL_TIMEOUT_MS = 3500;
+// ✅ FIX: Increased from 3500 to 5000ms — during SOS the network is saturated
+// (video streaming, GPS syncs, cloud recording) so cleanup needs more time
+const CANCEL_TIMEOUT_MS = 5000;
 const FN_TIMEOUT_MS = 12000;
 
 // ✅ Debug logs (dev only)
@@ -583,6 +585,44 @@ async function triggerPushNotifications({ deviceId, groupId, displayName, lat, l
   }
 }
 
+/**
+ * ✅ Trigger CANCEL push notification via Edge Function
+ * So users with app in background know the SOS has been resolved
+ */
+async function triggerCancelPushNotification({ deviceId, groupId, displayName }) {
+  try {
+    if (!deviceId || !groupId) return;
+
+    invokeFunctionWithTimeout(
+      SOS_NOTIFY_FN,
+      {
+        payload: {
+          device_id: deviceId,
+          display_name: displayName || null,
+          group_id: groupId,
+          latitude: null,
+          longitude: null,
+          timestamp: new Date().toISOString(),
+          type: "sos_cancel",
+        },
+      },
+      FN_TIMEOUT_MS
+    )
+      .then((out) => {
+        if (out.ok) {
+          console.log("✅ Cancel push notification sent via Edge Function");
+        } else {
+          console.log("⚠️ Cancel push notification failed (non-blocking):", out.error?.message);
+        }
+      })
+      .catch((e) => {
+        console.log("⚠️ Cancel push notification exception (non-blocking):", e?.message);
+      });
+  } catch (e) {
+    console.log("⚠️ Cancel push notification error (non-blocking):", e?.message);
+  }
+}
+
 // ✅ Start cloud recording ONCE per SOS activation, retrying (best-effort)
 async function safeStartCloudRecordingOnce(deviceId) {
   try {
@@ -950,53 +990,116 @@ export const sendCheckIn = async () => {
 // ✅ Hidden Safe Cancel (won't hang)
 // ✅ PRIVACY RESTORATION: When SOS is cancelled, fleet loses ALL access to
 //    location, camera, and audio until user triggers SOS again.
+// ✅ FIX: Broadcast cancel FIRST so fleet members stop alarms immediately,
+//    then run all cleanup in parallel so nothing blocks the cancel.
 export const cancelBatSignal = async () => {
   console.log("🟢 SOS CANCEL: Restoring privacy (stopping all sharing)...");
 
-  // Stop cloud recording (best-effort) + clear started flag/session
+  // ✅ Step 0: Resolve identifiers upfront (needed for broadcast + cleanup)
+  let deviceId, groupId, displayName;
   try {
-    const deviceId = await getDeviceId();
-
-    if (ENABLE_CLOUD_RECORDING_AUTOSTART) {
-      // Fire-and-forget stop (do NOT block UI)
-      tryStopCloudRecording({ deviceId, channel: deviceId });
-      clearCloudRecStarted(deviceId);
-      clearCloudRecSession(deviceId);
-    }
+    deviceId = await getDeviceId();
+    groupId = await getGroupId();
+    displayName = await getDisplayName();
   } catch {}
 
-  // Clear SOS in DB with timeout guard (prevents hangs)
+  // ✅ Step 1: BROADCAST CANCEL FIRST — this is what stops alarms on other devices
+  // Must happen before any cleanup that could hang (e.g., stopLiveTracking on Android)
   try {
-    await withTimeout(clearSOS(), CANCEL_TIMEOUT_MS, "clearSOS_timeout");
-  } catch {}
-
-  // ✅ PRIVACY RESTORATION: Stop background GPS tracking completely
-  // This marks user as OFFLINE and stops all location updates to fleet
-  try {
-    await withTimeout(stopLiveTracking(), CANCEL_TIMEOUT_MS, "stopLiveTracking_timeout");
-    console.log("✅ GPS tracking stopped (privacy restored)");
-  } catch (e) {
-    console.log("⚠️ stopLiveTracking timeout/failed (non-fatal):", e?.message || e);
-    // Fallback: at least try to sync OFFLINE status
-    try {
-      await withTimeout(safeForceOfflineSync(), CANCEL_TIMEOUT_MS, "forceOfflineSync_timeout");
-    } catch {}
-  }
-
-  // Best-effort broadcast cancel to fleet (timeout guarded)
-  try {
-    const deviceId = await getDeviceId();
-    const groupId = await getGroupId();
-    const displayName = await getDisplayName();
     if (deviceId && groupId) {
       const ok = await withTimeout(
         tryBroadcastCancel({ groupId, deviceId, displayName }),
-        2500,
+        3000,
         "broadcast_cancel_timeout"
       );
       if (ok) console.log("✅ SOS cancel broadcast delivered (in-app)");
+      else console.log("⚠️ SOS cancel broadcast may not have reached fleet");
+    }
+  } catch (e) {
+    console.log("⚠️ Broadcast cancel failed (non-fatal):", e?.message || e);
+  }
+
+  // ✅ Step 2: Send CANCEL push notification so background/offline users get notified
+  try {
+    if (deviceId && groupId) {
+      triggerCancelPushNotification({ deviceId, groupId, displayName });
     }
   } catch {}
+
+  // ✅ Step 3: Run ALL cleanup in PARALLEL (nothing should block the cancel)
+  await Promise.allSettled([
+    // Clear SOS flag in AsyncStorage
+    withTimeout(clearSOS(), CANCEL_TIMEOUT_MS, "clearSOS_timeout").catch(() => {}),
+
+    // Stop background GPS tracking + mark OFFLINE
+    withTimeout(stopLiveTracking(), CANCEL_TIMEOUT_MS, "stopLiveTracking_timeout")
+      .then(() => console.log("✅ GPS tracking stopped (privacy restored)"))
+      .catch(async (e) => {
+        console.log("⚠️ stopLiveTracking timeout/failed (non-fatal):", e?.message || e);
+        // Fallback: at least try to sync OFFLINE status via RPC
+        try {
+          await withTimeout(safeForceOfflineSync(), CANCEL_TIMEOUT_MS, "forceOfflineSync_timeout");
+        } catch {}
+      }),
+
+    // Stop cloud recording (best-effort)
+    (async () => {
+      try {
+        if (deviceId && ENABLE_CLOUD_RECORDING_AUTOSTART) {
+          tryStopCloudRecording({ deviceId, channel: deviceId });
+          clearCloudRecStarted(deviceId);
+          clearCloudRecSession(deviceId);
+        }
+      } catch {}
+    })(),
+
+    // ✅ Force DB status to OFFLINE via RPC (reliable backup — direct upsert may fail due to RLS)
+    (async () => {
+      try {
+        if (deviceId && groupId) {
+          const { error } = await withTimeout(
+            supabase.rpc("upsert_tracking_session", {
+              p_device_id: deviceId,
+              p_group_id: groupId,
+              p_data: {
+                status: "OFFLINE",
+                last_updated: new Date().toISOString(),
+              },
+            }),
+            CANCEL_TIMEOUT_MS,
+            "rpc_offline_timeout"
+          );
+          if (error) {
+            console.log("⚠️ RPC OFFLINE update failed (non-fatal):", error.message);
+          } else {
+            console.log("✅ DB status set to OFFLINE via RPC");
+          }
+        }
+      } catch (e) {
+        console.log("⚠️ RPC OFFLINE timeout (non-fatal):", e?.message || e);
+      }
+    })(),
+  ]);
+
+  // ✅ FIX: Delayed retry for OFFLINE RPC — during SOS the network is saturated,
+  // so the immediate attempt often fails. Retry after 3s when video/GPS have stopped.
+  if (deviceId && groupId) {
+    setTimeout(async () => {
+      try {
+        const { error } = await supabase.rpc("upsert_tracking_session", {
+          p_device_id: deviceId,
+          p_group_id: groupId,
+          p_data: {
+            status: "OFFLINE",
+            last_updated: new Date().toISOString(),
+          },
+        });
+        if (!error) {
+          console.log("✅ Delayed OFFLINE RPC succeeded");
+        }
+      } catch {}
+    }, 3000);
+  }
 
   return true;
 };

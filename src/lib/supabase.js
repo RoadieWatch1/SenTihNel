@@ -5,15 +5,17 @@ import { AppState, Platform } from "react-native";
 import { createClient } from "@supabase/supabase-js";
 
 export const SUPABASE_URL = "https://yjnqyzozvrgajavndgbm.supabase.co";
-
-// ✅ Keep your current publishable key for the main Supabase client (unchanged)
 export const SUPABASE_KEY = "sb_publishable_t3KmD3g6zK3c-4cyzGMrQw_carXwjUq";
 
-// ✅ NEW (Step 1): Add your *Legacy anon key* here (starts with: eyJ...)
-// This will be used ONLY for Edge Function "apikey" header (Step 2).
-export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqbnF5em96dnJnYWphdm5kZ2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3Mzk3MjksImV4cCI6MjA4MzMxNTcyOX0.8y7bbX4blhyDxZylhkfKQmgU5TfG2xWs51rSVSl-Bnw";
+export const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqbnF5em96dnJnYWphdm5kZ2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3Mzk3MjksImV4cCI6MjA4MzMxNTcyOX0.8y7bbX4blhyDxZylhkfKQmgU5TfG2xWs51rSVSl-Bnw";
 
-// ✅ RN-safe storage adapter (explicit interface Supabase expects)
+// ✅ Gate refresh until AuthGate confirms session validity
+if (typeof globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ === "undefined") {
+  globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+}
+
+// ✅ RN-safe storage adapter
 const rnStorage =
   Platform.OS === "web"
     ? undefined
@@ -27,13 +29,11 @@ function makeClient() {
   return createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
       ...(rnStorage ? { storage: rnStorage } : {}),
-      // ✅ Make storageKey explicit (easier to debug + avoid collisions)
       storageKey: "sentihnel.auth",
-      autoRefreshToken: true,
+      autoRefreshToken: false, // AuthGate manually starts it AFTER session is verified
       persistSession: true,
       detectSessionInUrl: false,
     },
-    // 🚫 Do NOT set processLock in RN — it can contribute to session “sticking”
   });
 }
 
@@ -45,12 +45,29 @@ if (!globalThis.__SENTIHNEL_SUPABASE_CLIENT__) {
   globalThis.__SENTIHNEL_SUPABASE_CLIENT__ = supabase;
 }
 
-// ✅ Register AppState auto-refresh ONCE
+// ✅ Handle stale/invalid refresh tokens gracefully (best-effort cleanup)
+if (!globalThis.__SENTIHNEL_AUTH_ERROR_GUARD__) {
+  globalThis.__SENTIHNEL_AUTH_ERROR_GUARD__ = true;
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    // If refresh logic ever yields no session, clear stored auth.
+    if (event === "TOKEN_REFRESHED" && !session) {
+      console.log("⚠️ Auth: Token refresh returned no session — clearing stale auth");
+      try {
+        await AsyncStorage.removeItem("sentihnel.auth");
+      } catch {}
+    }
+  });
+}
+
+// ✅ AppState refresh toggling — ONLY after AuthGate enables it
 if (Platform.OS !== "web") {
   if (!globalThis.__SENTIHNEL_SUPABASE_APPSTATE__) {
     globalThis.__SENTIHNEL_SUPABASE_APPSTATE__ = AppState.addEventListener(
       "change",
       (state) => {
+        if (!globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__) return;
+
         if (state === "active") {
           supabase.auth.startAutoRefresh();
         } else {
@@ -59,7 +76,4 @@ if (Platform.OS !== "web") {
       }
     );
   }
-
-  // ✅ Ensure refresh starts immediately in active state
-  supabase.auth.startAutoRefresh();
 }
