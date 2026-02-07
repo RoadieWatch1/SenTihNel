@@ -697,8 +697,9 @@ export default function FleetScreen() {
       }
       console.log("✅ PIN saved locally, hash:", hashed.slice(0, 12) + "...");
 
-      // Try to sync to Supabase (may fail if auth is expired)
+      // Sync to Supabase (upsert — works for both new and changed PINs)
       let cloudSaved = false;
+      let cloudError = null;
       try {
         const { data, error } = await Promise.race([
           supabase.rpc(RPC_SET_SOS_PIN, { p_pin_hash: hashed }),
@@ -708,10 +709,12 @@ export default function FleetScreen() {
         if (!error && data?.success !== false) {
           cloudSaved = true;
         } else {
-          console.log("PIN cloud save warning:", error?.message || data?.error);
+          cloudError = error?.message || data?.error || "Server rejected PIN save";
+          console.log("PIN cloud save rejected:", cloudError);
         }
       } catch (e) {
-        console.log("PIN cloud save failed (saved locally):", e?.message || e);
+        cloudError = e?.message || "Network error";
+        console.log("PIN cloud save failed (saved locally):", cloudError);
       }
 
       if (isMountedRef.current) {
@@ -720,10 +723,10 @@ export default function FleetScreen() {
       }
 
       Alert.alert(
-        "PIN Saved",
+        cloudSaved ? "PIN Saved" : "PIN Saved Locally",
         cloudSaved
           ? "Your SOS PIN has been saved. Remember this PIN - it unlocks your phone during SOS."
-          : "PIN saved to this device. It will sync to the cloud when connection is restored."
+          : `PIN saved to this device but could not sync to server (${cloudError}). It will work on this device but may not work after reinstall.`
       );
     } catch (e) {
       const msg = e?.message || "Could not save PIN";
