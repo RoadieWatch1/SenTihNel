@@ -68,6 +68,9 @@ const CLOUDREC_RETRY_DELAY_MS = 4000; // every 4s
 const CANCEL_TIMEOUT_MS = 5000;
 const FN_TIMEOUT_MS = 12000;
 
+// Timer ref for delayed OFFLINE RPC retry (cleared if cancel runs again)
+let offlineRetryTimer = null;
+
 // ✅ Debug logs (dev only)
 const DEBUG_CLOUDREC = !!__DEV__;
 
@@ -1083,8 +1086,13 @@ export const cancelBatSignal = async () => {
 
   // ✅ FIX: Delayed retry for OFFLINE RPC — during SOS the network is saturated,
   // so the immediate attempt often fails. Retry after 3s when video/GPS have stopped.
+  if (offlineRetryTimer) {
+    clearTimeout(offlineRetryTimer);
+    offlineRetryTimer = null;
+  }
   if (deviceId && groupId) {
-    setTimeout(async () => {
+    offlineRetryTimer = setTimeout(async () => {
+      offlineRetryTimer = null;
       try {
         const { error } = await supabase.rpc("upsert_tracking_session", {
           p_device_id: deviceId,

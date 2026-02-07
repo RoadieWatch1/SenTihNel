@@ -13,6 +13,37 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { cancelBatSignal } from "../services/BatSignal";
 import { supabase } from "../lib/supabase";
 
+// Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
+let SecureStore = null;
+try {
+  SecureStore = require("expo-secure-store");
+} catch {}
+
+const PIN_KEY = "sentinel_pin_hash";
+
+async function readPinHash() {
+  // Try SecureStore first
+  if (SecureStore?.getItemAsync) {
+    try {
+      const v = await SecureStore.getItemAsync(PIN_KEY);
+      if (v) return v;
+    } catch {}
+  }
+  // Fall back to AsyncStorage (also migrates on next write)
+  try {
+    return await AsyncStorage.getItem(PIN_KEY);
+  } catch {}
+  return null;
+}
+
+async function writePinHash(hash) {
+  // Write to SecureStore (primary) + AsyncStorage (fallback)
+  if (SecureStore?.setItemAsync) {
+    try { await SecureStore.setItemAsync(PIN_KEY, hash); } catch {}
+  }
+  try { await AsyncStorage.setItem(PIN_KEY, hash); } catch {}
+}
+
 const { width } = Dimensions.get("window");
 
 // Simple hash function (must match fleet.js)
@@ -124,25 +155,19 @@ export default function FakeLockScreen({ onUnlock }) {
 
       if (!error && data?.valid === true) {
         isValid = true;
-        // Cache PIN hash locally so it works offline next time
-        try {
-          await AsyncStorage.setItem("sentinel_pin_hash", hashed);
-        } catch {}
+        // Cache PIN hash locally (SecureStore + AsyncStorage) for offline use
+        await writePinHash(hashed);
       }
       // If "No PIN set" server-side, stay locked (user must set a PIN from fleet screen)
     } catch (e) {
       console.log("PIN verification error (falling back to local cache):", e?.message || e);
       // Supabase unreachable — verify against locally cached PIN hash only
       const hashed = hashPin(inputPin);
-      try {
-        const cachedHash = await AsyncStorage.getItem("sentinel_pin_hash");
-        if (cachedHash && cachedHash === hashed) {
-          isValid = true;
-        }
-        // No cached PIN + no server = stay locked (safe default)
-      } catch {
-        // Storage error = stay locked
+      const cachedHash = await readPinHash();
+      if (cachedHash && cachedHash === hashed) {
+        isValid = true;
       }
+      // No cached PIN + no server = stay locked (safe default)
     }
 
     if (isValid) {

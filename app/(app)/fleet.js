@@ -45,6 +45,32 @@ import { getDeviceId } from "../../src/services/Identity";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 
+// Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
+let SecureStore = null;
+try {
+  SecureStore = require("expo-secure-store");
+} catch {}
+
+const PIN_STORAGE_KEY = "sentinel_pin_hash";
+
+async function readPinHash() {
+  if (SecureStore?.getItemAsync) {
+    try {
+      const v = await SecureStore.getItemAsync(PIN_STORAGE_KEY);
+      if (v) return v;
+    } catch {}
+  }
+  try { return await AsyncStorage.getItem(PIN_STORAGE_KEY); } catch {}
+  return null;
+}
+
+async function writePinHash(hash) {
+  if (SecureStore?.setItemAsync) {
+    try { await SecureStore.setItemAsync(PIN_STORAGE_KEY, hash); } catch {}
+  }
+  try { await AsyncStorage.setItem(PIN_STORAGE_KEY, hash); } catch {}
+}
+
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
 const STORAGE_KEY_INVITE_CODE = "sentinel_invite_code";
 
@@ -560,7 +586,7 @@ export default function FleetScreen() {
       if (error) {
         console.log("checkHasPin warning:", error.message);
         // Fall back to local cache
-        const cached = await AsyncStorage.getItem("sentinel_pin_hash");
+        const cached = await readPinHash();
         if (isMountedRef.current) setHasPin(!!cached);
         return;
       }
@@ -570,7 +596,7 @@ export default function FleetScreen() {
       console.log("checkHasPin error:", e?.message || e);
       // Fall back to local cache
       try {
-        const cached = await AsyncStorage.getItem("sentinel_pin_hash");
+        const cached = await readPinHash();
         if (isMountedRef.current) setHasPin(!!cached);
       } catch {
         if (isMountedRef.current) setHasPin(false);
@@ -656,11 +682,11 @@ export default function FleetScreen() {
     try {
       const hashed = hashPin(pinInput);
 
-      // Always save locally first (works offline)
-      await AsyncStorage.setItem("sentinel_pin_hash", hashed);
+      // Always save locally first (SecureStore + AsyncStorage fallback)
+      await writePinHash(hashed);
 
       // Verify the save actually worked
-      const verify = await AsyncStorage.getItem("sentinel_pin_hash");
+      const verify = await readPinHash();
       if (verify !== hashed) {
         throw new Error("PIN failed to save to device storage. Please try again.");
       }

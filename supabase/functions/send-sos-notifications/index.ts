@@ -58,10 +58,17 @@ type QueueProcessResult = {
 // HELPERS
 // ============================================
 
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+};
+
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 }
 
@@ -94,6 +101,11 @@ function getDebugFlag(req: Request) {
 // ============================================
 
 serve(async (req: Request) => {
+  // CORS preflight
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: CORS_HEADERS });
+  }
+
   const debugMode = getDebugFlag(req);
 
   // You set these as SB_URL / SB_SERVICE_ROLE_KEY because CLI blocks SUPABASE_*
