@@ -231,7 +231,7 @@ export default function FleetScreen() {
     const v = typeof n === "number" ? n : parseInt(n, 10);
     if (Number.isNaN(v)) return "—";
     return `${Math.max(0, Math.min(100, v))}%`;
-    };
+  };
 
   const safeCoords = (lat, lng) => {
     if (typeof lat !== "number" || typeof lng !== "number") return "—";
@@ -281,8 +281,8 @@ export default function FleetScreen() {
   const getBatteryIcon = (batteryStatus, level) => {
     if (batteryStatus === "critical") return "battery-dead";
     if (batteryStatus === "low") return "battery-half";
-    if (level >= 80) return "battery-full";
-    if (level >= 50) return "battery-half";
+    if (level >= 70) return "battery-full";
+    if (level >= 40) return "battery-half";
     return "battery-half";
   };
 
@@ -428,6 +428,8 @@ export default function FleetScreen() {
         if (isMountedRef.current) {
           setGroupId(gid);
           setInviteCode("");
+          setRecentCheckIns([]); // ✅ Clear stale banners from previous fleet
+          setIncomingSos(null);
         }
 
         const code = await fetchInviteCodeForGroup(gid);
@@ -910,14 +912,18 @@ export default function FleetScreen() {
 
     // Update tab state (VIEW only - don't change tracking fleet)
     setActiveTab(tab);
+    setSwitchFleetType(tab); // ✅ Fix #1: keep switch modal in sync with active tab
 
     // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
+    // NOTE: groupId here is the VIEW fleet (subscriptions + list), not necessarily the device tracking fleet.
     if (isMountedRef.current) {
       setGroupId(fleet.groupId);
       setInviteCode(fleet.inviteCode || "");
       setInviteLoading(false);
       setWorkers([]);
       setNameByDevice({});
+      setRecentCheckIns([]); // ✅ Fix #5: clear stale check-ins from previous fleet
+      setIncomingSos(null);  // ✅ Fix #5: clear stale SOS from previous fleet
     }
 
     // Fetch members for this fleet (view only)
@@ -1013,39 +1019,40 @@ export default function FleetScreen() {
       let gidToUse = null;
       let codeToUse = null;
 
-      if (fleets) {
-        // Default to family fleet on boot
+      // ✅ Fix #2: Always reconcile from device row first (source of truth for tracking).
+      // ensureUserFleets is for VIEW only — don't write to AsyncStorage from it.
+      let reconciledGid = null;
+      try {
+        reconciledGid = await Promise.race([
+          reconcileGroupFromDeviceRow(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
+        ]);
+      } catch (e) {
+        console.log("reconcileGroup timed out or failed:", e?.message || e);
+      }
+
+      if (reconciledGid) {
+        // Device row is the source of truth for tracking
+        gidToUse = reconciledGid;
+        activeGroupIdRef.current = gidToUse;
+      } else if (fleets) {
+        // No device row yet — use ensured fleet for VIEW only (don't stomp storage)
         const defaultFleet = fleets.family || fleets.work;
         if (defaultFleet?.groupId) {
           gidToUse = defaultFleet.groupId;
           codeToUse = defaultFleet.inviteCode;
-          await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse);
-          if (codeToUse) {
-            await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, codeToUse);
-          }
-          activeGroupIdRef.current = gidToUse; // ✅ Track active group
+          activeGroupIdRef.current = gidToUse;
           if (isMountedRef.current) {
             setGroupId(gidToUse);
             setInviteCode(codeToUse || "");
             setInviteLoading(false);
           }
         }
-      }
-
-      // Fall back to cached context if ensure_user_fleets didn't work
-      if (!gidToUse) {
+      } else {
+        // Fall back to cached context
         const cachedGid = await loadFleetContext();
-        let reconciledGid = null;
-        try {
-          reconciledGid = await Promise.race([
-            reconcileGroupFromDeviceRow(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
-          ]);
-        } catch (e) {
-          console.log("reconcileGroup timed out or failed:", e?.message || e);
-        }
-        gidToUse = reconciledGid || cachedGid;
-        if (gidToUse) activeGroupIdRef.current = gidToUse; // ✅ Track active group
+        gidToUse = cachedGid;
+        if (gidToUse) activeGroupIdRef.current = gidToUse;
       }
 
       await fetchFleet(gidToUse);
@@ -1123,7 +1130,9 @@ export default function FleetScreen() {
       appStateRef.current = nextState;
 
       if (prev.match(/inactive|background/) && nextState === "active") {
-        if (groupId) fetchFleet(groupId);
+        // ✅ Fix #6: use ref to avoid stale closure over groupId
+        const gid = activeGroupIdRef.current;
+        if (gid) fetchFleet(gid);
       }
     });
 
@@ -1199,12 +1208,14 @@ export default function FleetScreen() {
 
     if (!groupId) return;
 
+    const subscribedGroup = groupId; // ✅ Fix #6: capture in closure to avoid stale ref
+
     const ch = supabase
       .channel(`fleet:${groupId}`)
       .on("broadcast", { event: "sos" }, (payload) => {
         // ✅ Check if this broadcast is still for the active group
-        if (activeGroupIdRef.current && groupId !== activeGroupIdRef.current) {
-          console.log("🟡 Ignoring stale SOS broadcast:", groupId?.slice(0, 8));
+        if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) {
+          console.log("🟡 Ignoring stale SOS broadcast:", subscribedGroup?.slice(0, 8));
           return;
         }
 
@@ -1219,7 +1230,7 @@ export default function FleetScreen() {
           });
         }
 
-        fetchFleet(groupId);
+        fetchFleet(subscribedGroup);
 
         setTimeout(() => {
           if (!isMountedRef.current) return;
@@ -1231,7 +1242,8 @@ export default function FleetScreen() {
         }, 12500);
       })
       .on("broadcast", { event: "check_in" }, (payload) => {
-        // ✅ Check-in broadcast received
+        // ✅ Check-in broadcast received — ignore if fleet changed
+        if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) return;
         const p = payload?.payload || payload;
         const device_id = p?.device_id || p?.deviceId || "Unknown";
         const display_name = p?.display_name || null;
@@ -1309,6 +1321,12 @@ export default function FleetScreen() {
         return;
       }
 
+      // ✅ Early exit if already on this fleet
+      if (prevGroupId && String(targetGroupId) === String(prevGroupId)) {
+        setSwitchError("You're already linked to this fleet.");
+        return;
+      }
+
       // ✅ Check if user already OWNS this fleet (skip subscription check)
       const isOwnedWorkFleet = ownedFleets.work?.groupId === targetGroupId;
       const isOwnedFamilyFleet = ownedFleets.family?.groupId === targetGroupId;
@@ -1329,7 +1347,7 @@ export default function FleetScreen() {
         // 2) Join fleet via RPC (requires subscription for external fleets)
         const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, {
           p_invite_code: clean,
-          p_fleet_type: switchFleetType,
+          p_fleet_type: switchFleetType, // ✅ source of truth for the join intent
         });
         if (joinErr) throw joinErr;
 
@@ -1363,6 +1381,8 @@ export default function FleetScreen() {
         setWorkers([]);
         setNameByDevice({});
         setErrorText("");
+        setRecentCheckIns([]); // ✅ Fix #5: clear stale check-ins from previous fleet
+        setIncomingSos(null);  // ✅ Fix #5: clear stale SOS from previous fleet
       }
 
       // 5) Fetch invite code for display
@@ -1388,7 +1408,17 @@ export default function FleetScreen() {
       const msg = e?.message || "Could not switch fleets.";
       console.log("switch fleet error:", msg);
 
-      // restore previous context
+      // ✅ Restore previous context (including ref — prevents stale subscription filtering)
+      activeGroupIdRef.current = prevGroupId;
+
+      if (isMountedRef.current) {
+        setGroupId(prevGroupId);
+        setWorkers([]);
+        setNameByDevice({});
+        setRecentCheckIns([]);
+        setIncomingSos(null);
+      }
+
       try {
         await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
       } catch {}
@@ -1415,6 +1445,15 @@ export default function FleetScreen() {
   // =========================
   // ✅ Remove Device (Baby Step 5)
   // =========================
+  const isSelfDevice = async (deviceId) => {
+    try {
+      const myId = await getDeviceId();
+      return String(myId) === String(deviceId);
+    } catch {
+      return false;
+    }
+  };
+
   const tryRemoveDeviceRpc = async ({ deviceId, hard }) => {
     const d = String(deviceId || "").trim();
     if (!d) throw new Error("Invalid device id.");
@@ -1480,8 +1519,14 @@ export default function FleetScreen() {
     throw lastErr || new Error("Remove failed.");
   };
 
-  const openMemberMenu = (item) => {
+  const openMemberMenu = async (item) => {
     if (!isAdmin) return;
+
+    // ✅ Prevent admin from removing their own device by mistake
+    if (await isSelfDevice(item?.device_id)) {
+      Alert.alert("Not allowed", "You can't remove your own device from the fleet.");
+      return;
+    }
 
     const who = getFriendlyName(item?.device_id);
     Alert.alert("Options", who, [
@@ -2183,8 +2228,10 @@ export default function FleetScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => {
+              const gid = activeGroupIdRef.current;
+              if (!gid) return;
               setRefreshing(true);
-              fetchFleet();
+              fetchFleet(gid);
             }}
             tintColor="#22c55e"
           />
