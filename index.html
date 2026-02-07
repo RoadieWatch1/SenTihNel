@@ -1117,8 +1117,7 @@
     // TODO: PRODUCTION — Ensure strict RLS policies on all tables.
     // The anon key below is safe ONLY if RLS restricts queries to the logged-in user's fleets/members.
     // Without RLS, anyone with this key can query all fleets.
-    // Agora APP_ID fetched from token server. Fallback used during migration only.
-    const AGORA_APP_ID_FALLBACK = '5478104d15af4128a42f0b6b59f87ef3';
+    // Agora APP_ID fetched from token server. No fallback — token required.
     let AGORA_APP_ID = null;
     const SUPABASE_URL = 'https://yjnqyzozvrgajavndgbm.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqbnF5em96dnJnYWphdm5kZ2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3Mzk3MjksImV4cCI6MjA4MzMxNTcyOX0.8y7bbX4blhyDxZylhkfKQmgU5TfG2xWs51rSVSl-Bnw';
@@ -1156,17 +1155,9 @@
     const FINAL_STYLE_ORDER = STYLE_OVERRIDE ? [STYLE_OVERRIDE, ...STYLE_ORDER] : [...STYLE_ORDER];
 
     // --- Police scanning tuning ---
-    // TODO: PRODUCTION — Proxy Overpass through your own API with caching + backoff.
-    // Direct calls to public Overpass endpoints will get rate-limited or fail during
-    // real emergencies when you need them most.
+    // Proxied through our edge function (caching + auth + no direct coord exposure)
     const POLICE_SCAN_RADIUS_M = 50000;
     const POLICE_MAX_RESULTS = 6;
-
-    const OVERPASS_ENDPOINTS = [
-      'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter',
-      'https://overpass.nchc.org.tw/api/interpreter'
-    ];
 
     // STATE
     let map, marker, markerEl;
@@ -2281,30 +2272,36 @@
         </div>
       `;
 
-      const query = `[out:json][timeout:15];
-        (
-          node["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
-          way["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
-          relation["amenity"="police"](around:${POLICE_SCAN_RADIUS_M},${lat},${lng});
-        );
-        out center tags;`;
-
+      // Fetch via our proxy edge function (cached + auth'd + no direct coord exposure)
       let overpassData = null;
+      try {
+        const { data: { session } } = await db.auth.getSession();
+        if (!session?.access_token) throw new Error('Not authenticated');
 
-      for (const ep of OVERPASS_ENDPOINTS) {
-        const url = `${ep}?data=${encodeURIComponent(query)}`;
-        try {
-          overpassData = await fetchJsonWithTimeout(url, {}, 15000);
-          if (overpassData && Array.isArray(overpassData.elements)) break;
-        } catch (e) {
-          overpassData = null;
+        const res = await fetchJsonWithTimeout(
+          `${SUPABASE_URL}/functions/v1/nearby-police`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ lat, lng, radius: POLICE_SCAN_RADIUS_M }),
+          },
+          20000
+        );
+        if (res && Array.isArray(res.elements)) {
+          overpassData = res;
         }
+      } catch (e) {
+        console.warn('Police scan proxy failed:', e.message);
       }
 
       if (!overpassData || !Array.isArray(overpassData.elements)) {
         listDiv.innerHTML = `
           <div style="padding:10px;text-align:center;font-size:12px;color:var(--text-muted); font-family:'Share Tech Mono', monospace;">
-            Police scan temporarily unavailable (Overpass busy). Tap SCAN to retry.
+            Police scan temporarily unavailable. Tap SCAN to retry.
           </div>
         `;
         policeScanInFlight = false;
@@ -2530,7 +2527,7 @@
     async function createAndJoinAgora() {
       if (!DEVICE_ID) return;
 
-      // Fetch server-issued token (falls back to null during migration)
+      // Fetch server-issued token (required — no fallback)
       let agoraToken = null;
       try {
         const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber');
@@ -2538,10 +2535,19 @@
         AGORA_APP_ID = tokenData.app_id;
         console.log('Agora token fetched for:', DEVICE_ID);
       } catch (e) {
-        console.warn('Agora token fetch failed, falling back to null token:', e.message);
+        console.error('Agora token fetch failed:', e.message);
+        showOverlay(true, 'AUTH FAILED — CANNOT CONNECT TO FEED');
+        setTopStatus('AUTH FAILED');
+        return;
       }
 
-      const appId = AGORA_APP_ID || AGORA_APP_ID_FALLBACK;
+      if (!agoraToken || !AGORA_APP_ID) {
+        showOverlay(true, 'AUTH FAILED — MISSING TOKEN');
+        setTopStatus('AUTH FAILED');
+        return;
+      }
+
+      const appId = AGORA_APP_ID;
 
       agoraClient = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
       agoraClient.setClientRole("audience");

@@ -139,6 +139,22 @@ serve(async (req: Request) => {
   try {
     const supabase = createClient(supabaseUrl, supabaseKey) as any;
 
+    // ── Auth: verify JWT ────────────────────────────────────
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const jwt = authHeader.replace("Bearer ", "").trim();
+    if (!jwt) {
+      return json({ success: false, sent: 0, error: "Missing authorization" }, 401);
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(jwt);
+
+    if (authError || !user) {
+      return json({ success: false, sent: 0, error: "Invalid or expired token" }, 401);
+    }
+
     const body = await req.json().catch(() => ({}));
 
     // 1) Allow processing a specific queue id for debugging
@@ -162,6 +178,22 @@ serve(async (req: Request) => {
               }
             : { success: false, sent: 0, error: "Invalid payload: group_id and device_id required." },
           400
+        );
+      }
+
+      // Verify caller is a member of the target fleet
+      const { data: membership, error: memberErr } = await supabase
+        .from("group_members")
+        .select("id")
+        .eq("group_id", directPayload.group_id)
+        .eq("user_id", user.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (memberErr || !membership) {
+        return json(
+          { success: false, sent: 0, error: "Not a member of this fleet" },
+          403
         );
       }
 

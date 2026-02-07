@@ -6,8 +6,7 @@ import Constants from "expo-constants";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../lib/supabase";
 
 // Agora APP_ID is fetched from the token server at runtime.
-// Fallback used only during migration (before App Certificate is enforced).
-const AGORA_APP_ID_FALLBACK = "5478104d15af4128a42f0b6b59f87ef3";
+// No fallback — token server is required for secure channel access.
 
 async function fetchAgoraToken(channelId, role = "publisher") {
   const { data: { session } } = await supabase.auth.getSession();
@@ -251,16 +250,26 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
     if (initLockRef.current) return;
     initLockRef.current = true;
 
-    // Fetch Agora token from server (falls back to null if unavailable)
+    // Fetch Agora token from server (required — no fallback)
     let agoraToken = null;
-    let appId = AGORA_APP_ID_FALLBACK;
+    let appId = null;
     try {
       const tokenData = await fetchAgoraToken(channelId, "publisher");
       agoraToken = tokenData.token;
-      appId = tokenData.app_id || appId;
+      appId = tokenData.app_id;
       console.log("✅ Agora token fetched for channel:", channelId);
     } catch (e) {
-      console.warn("⚠️ Agora token fetch failed, falling back to null token:", e?.message);
+      console.error("❌ Agora token fetch failed:", e?.message);
+      setEngineState("error");
+      initLockRef.current = false;
+      return;
+    }
+
+    if (!agoraToken || !appId) {
+      console.error("❌ Agora token or app_id missing from server response");
+      setEngineState("error");
+      initLockRef.current = false;
+      return;
     }
 
     if (!channelId) {
@@ -445,7 +454,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         await applyCameraFacing(defaultFacing);
       } catch {}
 
-      // D) Join the channel with server-issued token (or null during migration)
+      // D) Join the channel with server-issued token
       await agoraEngine.current.joinChannel(agoraToken, channelId, 0, {});
     } catch (e) {
       console.error("❌ INIT ERROR:", e);

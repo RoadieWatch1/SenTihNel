@@ -15,9 +15,6 @@ import { supabase } from "../lib/supabase";
 
 const { width } = Dimensions.get("window");
 
-// 🔴 FALLBACK CODE (only used if user has no custom PIN set)
-const FALLBACK_CODE = "1337";
-
 // Simple hash function (must match fleet.js)
 const hashPin = (pin) => {
   let hash = 0;
@@ -115,12 +112,11 @@ export default function FakeLockScreen({ onUnlock }) {
 
     safeSet(() => setMessage("Verifying..."));
 
-    // ✅ Verify PIN against user's custom PIN (or fallback)
+    // Verify PIN against server, then local cache. No hardcoded fallbacks.
     let isValid = false;
 
     try {
       const hashed = hashPin(inputPin);
-      // ✅ FIX: Add timeout to Supabase RPC call so it never hangs
       const { data, error } = await withTimeout(
         supabase.rpc("verify_user_sos_pin", { p_pin_hash: hashed }),
         PIN_VERIFY_TIMEOUT_MS
@@ -128,33 +124,24 @@ export default function FakeLockScreen({ onUnlock }) {
 
       if (!error && data?.valid === true) {
         isValid = true;
-        // ✅ FIX: Cache PIN hash locally so it works offline / when RPC times out
+        // Cache PIN hash locally so it works offline next time
         try {
           await AsyncStorage.setItem("sentinel_pin_hash", hashed);
         } catch {}
-      } else if (data?.error === "No PIN set") {
-        isValid = (inputPin === FALLBACK_CODE);
       }
+      // If "No PIN set" server-side, stay locked (user must set a PIN from fleet screen)
     } catch (e) {
-      console.log("PIN verification error (falling back to local):", e?.message || e);
-      // If Supabase is unreachable (timeout, network error, expired session),
-      // verify against locally cached PIN hash, then fallback code
+      console.log("PIN verification error (falling back to local cache):", e?.message || e);
+      // Supabase unreachable — verify against locally cached PIN hash only
       const hashed = hashPin(inputPin);
       try {
         const cachedHash = await AsyncStorage.getItem("sentinel_pin_hash");
-        console.log("PIN local check:", {
-          hasCache: !!cachedHash,
-          cachePrefix: cachedHash?.slice(0, 12),
-          inputPrefix: hashed?.slice(0, 12),
-          match: cachedHash === hashed,
-        });
         if (cachedHash && cachedHash === hashed) {
           isValid = true;
-        } else {
-          isValid = (inputPin === FALLBACK_CODE);
         }
+        // No cached PIN + no server = stay locked (safe default)
       } catch {
-        isValid = (inputPin === FALLBACK_CODE);
+        // Storage error = stay locked
       }
     }
 
