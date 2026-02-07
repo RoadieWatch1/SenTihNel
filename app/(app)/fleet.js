@@ -395,39 +395,6 @@ export default function FleetScreen() {
     }
   }, []);
 
-  // ✅ Handle tab switch between user's OWN fleets (Work/Family)
-  // NOTE: Switching tabs only VIEWS the fleet - device stays in its current tracking fleet
-  // Device only moves when user explicitly joins a fleet via invite code
-  const handleTabSwitch = useCallback(async (tab) => {
-    if (tab === activeTab) return;
-
-    const fleet = ownedFleets[tab];
-    if (!fleet?.groupId) {
-      console.log("Tab switch: No fleet found for tab", tab);
-      return;
-    }
-
-    // ✅ Set active group ref FIRST to prevent stale subscription callbacks
-    activeGroupIdRef.current = fleet.groupId;
-
-    // Update tab state (VIEW only - don't change tracking fleet)
-    setActiveTab(tab);
-
-    // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
-    if (isMountedRef.current) {
-      setGroupId(fleet.groupId);
-      setInviteCode(fleet.inviteCode || "");
-      setInviteLoading(false);
-      setWorkers([]);
-      setNameByDevice({});
-    }
-
-    // Fetch members for this fleet (view only)
-    await fetchFleet(fleet.groupId);
-
-    console.log("✅ Viewing", tab, "fleet:", fleet.groupId?.slice(0, 8));
-  }, [activeTab, ownedFleets, fetchFleet]);
-
   // ✅ After login, don't trust cached group_id.
   const reconcileGroupFromDeviceRow = useCallback(async () => {
     try {
@@ -725,7 +692,7 @@ export default function FleetScreen() {
       Alert.alert(
         cloudSaved ? "PIN Saved" : "PIN Saved Locally",
         cloudSaved
-          ? "Your SOS PIN has been saved. Remember this PIN - it unlocks your phone during SOS."
+          ? "Your SOS PIN is saved. If you change it later, your old PIN will stop working."
           : `PIN saved to this device but could not sync to server (${cloudError}). It will work on this device but may not work after reinstall.`
       );
     } catch (e) {
@@ -925,6 +892,39 @@ export default function FleetScreen() {
     },
     [groupId, hydrateNamesForSessions]
   );
+
+  // ✅ Handle tab switch between user's OWN fleets (Work/Family)
+  // NOTE: Switching tabs only VIEWS the fleet - device stays in its current tracking fleet
+  // Device only moves when user explicitly joins a fleet via invite code
+  const handleTabSwitch = useCallback(async (tab) => {
+    if (tab === activeTab) return;
+
+    const fleet = ownedFleets[tab];
+    if (!fleet?.groupId) {
+      console.log("Tab switch: No fleet found for tab", tab);
+      return;
+    }
+
+    // ✅ Set active group ref FIRST to prevent stale subscription callbacks
+    activeGroupIdRef.current = fleet.groupId;
+
+    // Update tab state (VIEW only - don't change tracking fleet)
+    setActiveTab(tab);
+
+    // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
+    if (isMountedRef.current) {
+      setGroupId(fleet.groupId);
+      setInviteCode(fleet.inviteCode || "");
+      setInviteLoading(false);
+      setWorkers([]);
+      setNameByDevice({});
+    }
+
+    // Fetch members for this fleet (view only)
+    await fetchFleet(fleet.groupId);
+
+    console.log("✅ Viewing", tab, "fleet:", fleet.groupId?.slice(0, 8));
+  }, [activeTab, ownedFleets, fetchFleet]);
 
   const sortedWorkers = useMemo(() => {
     const arr = Array.isArray(workers) ? [...workers] : [];
@@ -1830,7 +1830,7 @@ export default function FleetScreen() {
             </Text>
 
             <Text style={styles.pinWarningModal}>
-              ⚠️ You cannot change this PIN later. Make sure you remember it.
+              ⚠️ Remember this PIN. If you change it, your old PIN will stop working.
             </Text>
 
             {/* PIN Dots Display */}
@@ -2160,7 +2160,7 @@ export default function FleetScreen() {
               )}
 
               <Text style={styles.pinWarning}>
-                ⚠️ IMPORTANT: Remember this PIN. It is the ONLY code that can unlock your phone during an emergency SOS.
+                ⚠️ IMPORTANT: Remember this PIN. If you change it, your old PIN will no longer unlock the SOS screen.
               </Text>
             </>
           )}
