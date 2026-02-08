@@ -1310,13 +1310,31 @@ export default function FleetScreen() {
         const device_id = p?.device_id || p?.deviceId || "Unknown";
         console.log("✅ SOS cancel broadcast received:", device_id);
 
-        // Clear the SOS banner immediately
         if (isMountedRef.current) {
+          // Clear the SOS banner immediately
           setIncomingSos(null);
+
+          // ✅ FIX: Optimistically update worker card status to OFFLINE immediately
+          // so it doesn't keep showing SOS while we wait for the DB to update.
+          setWorkers((prev) =>
+            prev.map((w) =>
+              String(w.device_id) === String(device_id)
+                ? { ...w, status: "OFFLINE", last_updated: new Date().toISOString() }
+                : w
+            )
+          );
         }
 
-        // Refresh fleet data so worker cards drop SOS status
+        // Refresh fleet data from DB (may still show SOS briefly due to race, but
+        // the optimistic update above covers the UI immediately)
         if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
+
+        // ✅ Safety: re-fetch again after 4s to catch the delayed OFFLINE RPC
+        setTimeout(() => {
+          if (!isMountedRef.current) return;
+          if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) return;
+          if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
+        }, 4000);
 
         // ✅ Safety backup: stop alarm in case SOSAlertManager's channel missed the cancel
         try { AlarmService.stopAlarm(); } catch {}

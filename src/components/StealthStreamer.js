@@ -3,6 +3,7 @@ import React, { useRef, useEffect, useState, useMemo } from "react";
 import { View, Text, PermissionsAndroid, Platform, StyleSheet } from "react-native";
 import * as Location from "expo-location";
 import Constants from "expo-constants";
+import NetInfo from "@react-native-community/netinfo";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../lib/supabase";
 
 // Agora APP_ID is fetched from the token server at runtime.
@@ -138,6 +139,20 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
       camControlRef.current = null;
     };
   }, [channelId]);
+
+  // ✅ Network recovery: restart Agora if it gave up after max retries
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (!mountedRef.current) return;
+      if (state.isConnected && engineState === "error" && !initLockRef.current) {
+        console.log("📡 Network recovered — restarting Agora after previous failure");
+        retryCountRef.current = 0;
+        setEngineState("starting");
+        initAgoraSafely();
+      }
+    });
+    return () => unsubscribe();
+  }, [engineState]);
 
   const startSystems = async () => {
     // 1) Start GPS (non-blocking)

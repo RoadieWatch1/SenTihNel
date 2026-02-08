@@ -27,6 +27,7 @@ interface SOSPayload {
   longitude?: number;
   timestamp?: string;
   group_id: string;
+  type?: string; // "sos" (default) or "sos_cancel"
 }
 
 interface PushToken {
@@ -278,7 +279,10 @@ serve(async (req: Request) => {
 async function sendSOSNotifications(supabase: any, payload: SOSPayload): Promise<SendResult> {
   const { device_id, display_name, latitude, longitude, group_id, timestamp } = payload;
 
-  console.log(`Sending SOS notifications for device ${device_id} in group ${group_id}`);
+  // Detect if this is a cancel notification
+  const isCancel = (payload as any).type === "sos_cancel";
+
+  console.log(`Sending ${isCancel ? "SOS CANCEL" : "SOS"} notifications for device ${device_id} in group ${group_id}`);
 
   const { data: tokens, error: tokenError } = await supabase
     .from("push_tokens")
@@ -300,10 +304,14 @@ async function sendSOSNotifications(supabase: any, payload: SOSPayload): Promise
     .filter((t) => isExpoToken(t.push_token))
     .map((t) => ({
       to: t.push_token,
-      title: "🚨 SOS ALERT",
-      body: `${display_name || "A fleet member"} needs immediate help!`,
+      title: isCancel
+        ? "SOS Cancelled"
+        : "🚨 SOS ALERT",
+      body: isCancel
+        ? `${display_name || "Fleet member"}'s emergency has been resolved`
+        : `${display_name || "A fleet member"} needs immediate help!`,
       data: {
-        type: "sos",
+        type: isCancel ? "sos_cancel" : "sos",
         device_id,
         display_name: display_name ?? null,
         latitude: latitude ?? null,
@@ -311,10 +319,10 @@ async function sendSOSNotifications(supabase: any, payload: SOSPayload): Promise
         timestamp: timestamp ?? null,
         group_id,
       },
-      sound: "default",
+      sound: isCancel ? "default" : "default",
       priority: "high",
       ...(t.platform === "android" ? { channelId: ANDROID_CHANNEL_ID } : {}),
-      badge: 1,
+      badge: isCancel ? 0 : 1,
     }));
 
   if (messages.length === 0) {

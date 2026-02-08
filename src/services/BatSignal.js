@@ -1006,7 +1006,30 @@ export const cancelBatSignal = async () => {
     displayName = await getDisplayName();
   } catch {}
 
-  // ✅ Step 1: BROADCAST CANCEL FIRST — this is what stops alarms on other devices
+  // ✅ Step 1a: Quick OFFLINE RPC FIRST — so DB is updated before fleet re-fetches
+  // Short timeout (1.5s) so it doesn't delay the broadcast. If it fails, Step 3 retries.
+  try {
+    if (deviceId && groupId) {
+      const { error } = await withTimeout(
+        supabase.rpc("upsert_tracking_session", {
+          p_device_id: deviceId,
+          p_group_id: groupId,
+          p_data: {
+            status: "OFFLINE",
+            last_updated: new Date().toISOString(),
+          },
+        }),
+        1500,
+        "quick_offline_rpc_timeout"
+      );
+      if (!error) console.log("✅ Quick OFFLINE RPC succeeded (DB updated before broadcast)");
+      else console.log("⚠️ Quick OFFLINE RPC failed (will retry in Step 3):", error.message);
+    }
+  } catch (e) {
+    console.log("⚠️ Quick OFFLINE RPC timeout (will retry in Step 3):", e?.message || e);
+  }
+
+  // ✅ Step 1b: BROADCAST CANCEL — this is what stops alarms on other devices
   // Must happen before any cleanup that could hang (e.g., stopLiveTracking on Android)
   try {
     if (deviceId && groupId) {

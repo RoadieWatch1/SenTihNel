@@ -80,6 +80,15 @@ export default function FakeLockScreen({ onUnlock }) {
     };
   }, []);
 
+  // ✅ Brief "SOS Sent" confirmation so user knows the alert went through
+  useEffect(() => {
+    setMessage("SOS Sent — Enter PIN to cancel");
+    const timer = setTimeout(() => {
+      if (mountedRef.current) setMessage("Enter PIN");
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
   const safeSet = (fn) => {
     if (mountedRef.current) fn();
   };

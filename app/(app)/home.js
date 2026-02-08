@@ -50,7 +50,6 @@ const STORAGE_KEY_SOS = "sentinel_sos_active";
 
 const TAP_WINDOW_MS = 3000;
 const TAP_TARGET = 7;
-const STORAGE_KEY_OVERLAY_ASKED = "sentinel_overlay_asked";
 
 function isGranted(status) {
   return String(status || "").toLowerCase() === "granted";
@@ -376,6 +375,11 @@ export default function HomePage() {
         // App came to foreground — hide floating button
         FloatingSOSButton.stop();
 
+        // ✅ Re-check overlay permission every time app resumes
+        // (user may have granted it in Settings after the initial prompt)
+        const hasOverlay = await FloatingSOSButton.checkPermission();
+        overlayPermRef.current = hasOverlay;
+
         // Backup: check SOS flag in case event didn't fire
         const triggered = await FloatingSOSButton.checkSOSFlag();
         if (triggered && triggerSOSRef.current) {
@@ -383,8 +387,12 @@ export default function HomePage() {
           triggerSOSRef.current();
         }
       } else if (nextAppState === "background" && permReady && !isSOS) {
-        // App went to background — show floating button (if permission granted)
-        FloatingSOSButton.start();
+        // ✅ Re-check permission right before starting (may have been granted since last check)
+        const hasOverlay = await FloatingSOSButton.checkPermission();
+        overlayPermRef.current = hasOverlay;
+        if (hasOverlay) {
+          FloatingSOSButton.start();
+        }
       }
     };
 
@@ -392,7 +400,8 @@ export default function HomePage() {
     return () => sub.remove();
   }, [permReady, isSOS]);
 
-  // ✅ Floating SOS button: request overlay permission once (after permissions are ready)
+  // ✅ Floating SOS button: request overlay permission (after permissions are ready)
+  // Re-prompts once per app launch if permission still not granted (not just once ever)
   useEffect(() => {
     if (!FloatingSOSButton.isAvailable || !permReady) return;
 
@@ -401,22 +410,18 @@ export default function HomePage() {
       overlayPermRef.current = hasOverlay;
 
       if (!hasOverlay) {
-        // Check if we've asked before
-        const asked = await AsyncStorage.getItem(STORAGE_KEY_OVERLAY_ASKED);
-        if (!asked) {
-          await AsyncStorage.setItem(STORAGE_KEY_OVERLAY_ASKED, "1");
-          Alert.alert(
-            "Enable Quick Access",
-            "Allow SenTihNel to show a floating button over other apps. This lets you trigger an emergency alert even when the app is in the background.",
-            [
-              { text: "Not Now", style: "cancel" },
-              {
-                text: "Enable",
-                onPress: () => FloatingSOSButton.requestPermission(),
-              },
-            ]
-          );
-        }
+        // Prompt once per app session (not once ever) — safety feature deserves persistence
+        Alert.alert(
+          "Enable Quick Access",
+          "Allow SenTihNel to show a floating SOS button over other apps. This lets you trigger an emergency alert even when the app is in the background.\n\nGo to Settings → toggle ON → come back.",
+          [
+            { text: "Not Now", style: "cancel" },
+            {
+              text: "Enable",
+              onPress: () => FloatingSOSButton.requestPermission(),
+            },
+          ]
+        );
       }
     })();
   }, [permReady]);
@@ -539,7 +544,7 @@ export default function HomePage() {
     }
   };
 
-  // ✅ Hidden Cancel Handler
+  // ✅ Hidden Cancel Handler — requires PIN (shows FakeLockScreen)
   const handleHiddenCancelTap = async () => {
     const now = Date.now();
     if (!tapStartRef.current || now - tapStartRef.current > TAP_WINDOW_MS) {
@@ -564,7 +569,10 @@ export default function HomePage() {
         return;
       }
 
-      await cancelBatSignal();
+      // ✅ FIX: Show FakeLockScreen (requires PIN) instead of cancelling directly.
+      // This prevents an abuser from silently cancelling the SOS without knowing the PIN.
+      setIsSOS(true);
+      setSosStartTime(Date.now());
     }
   };
 

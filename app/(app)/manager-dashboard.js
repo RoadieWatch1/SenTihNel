@@ -55,6 +55,11 @@ export default function ManagerDashboard() {
 
   // Auto-refresh timer
   const refreshTimerRef = useRef(null);
+  // ✅ Real-time SOS: store group_id for broadcast subscription
+  const groupIdRef = useRef(null);
+  const broadcastChannelRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const fetchRef = useRef(null);
 
   // Check if user is Work fleet owner
   const checkOwnership = useCallback(async () => {
@@ -66,6 +71,8 @@ export default function ManagerDashboard() {
       setHasWorkFleet(data?.has_work_fleet === true);
       setInviteCode(data?.invite_code || "");
       setMemberCount(data?.member_count || 0);
+      // ✅ Store group_id for real-time SOS subscription
+      if (data?.group_id) groupIdRef.current = data.group_id;
 
       return data?.is_owner === true;
     } catch (e) {
@@ -157,6 +164,47 @@ export default function ManagerDashboard() {
       }
     };
   }, [isOwner, fetchMemberLocations]);
+
+  // ✅ Keep fetchRef in sync for broadcast handler
+  fetchRef.current = fetchMemberLocations;
+
+  // ✅ Real-time SOS subscription — instant alerts instead of 15s polling delay
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!isOwner || !groupIdRef.current) return;
+
+    // Clean up previous channel
+    if (broadcastChannelRef.current) {
+      try { supabase.removeChannel(broadcastChannelRef.current); } catch {}
+      broadcastChannelRef.current = null;
+    }
+
+    const gid = groupIdRef.current;
+    const ch = supabase
+      .channel(`fleet:${gid}`)
+      .on("broadcast", { event: "sos" }, () => {
+        console.log("📡 Dashboard: SOS broadcast received — refreshing immediately");
+        if (fetchRef.current) fetchRef.current(true);
+      })
+      .on("broadcast", { event: "sos_cancel" }, () => {
+        console.log("📡 Dashboard: SOS cancel broadcast received — refreshing");
+        if (fetchRef.current) fetchRef.current(true);
+      })
+      .subscribe();
+
+    broadcastChannelRef.current = ch;
+
+    return () => {
+      if (broadcastChannelRef.current) {
+        try { supabase.removeChannel(broadcastChannelRef.current); } catch {}
+        broadcastChannelRef.current = null;
+      }
+    };
+  }, [isOwner]);
 
   // Fetch blocked users
   const fetchBlockedUsers = useCallback(async () => {
