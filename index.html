@@ -1207,12 +1207,7 @@
 
     // ✅ Session management: handle token refresh failures and sign-outs
     db.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' && !session) {
-        console.warn('Auth: Token refresh failed — session expired');
-        handleLogout();
-      }
       if (event === 'SIGNED_OUT') {
-        // Another tab/window signed out
         if (currentUser) {
           currentUser = null;
           document.getElementById('login-overlay').classList.remove('hidden');
@@ -1223,7 +1218,7 @@
     // ═══════════════════════════════════════════════════════════════
     // AGORA TOKEN
     // ═══════════════════════════════════════════════════════════════
-    async function fetchAgoraToken(deviceId, role = 'subscriber') {
+    async function fetchAgoraToken(deviceId, role = 'subscriber', uid = 0) {
       const { data: { session } } = await db.auth.getSession();
       if (!session?.access_token) throw new Error('Not authenticated');
 
@@ -1234,7 +1229,7 @@
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ device_id: deviceId, uid: 0, role }),
+        body: JSON.stringify({ device_id: deviceId, uid, role }),
       });
 
       if (!res.ok) {
@@ -2469,7 +2464,7 @@
     }
 
     function setActiveCamera(which) {
-      activeCam = (which === 'front') ? 'back' : 'front';
+      activeCam = (which === 'back') ? 'back' : 'front';
 
       const b = document.getElementById('tab-back');
       const f = document.getElementById('tab-front');
@@ -2536,16 +2531,20 @@
     // ----------------------------
     // VIDEO ENGINE (Agora) - audience, 2 possible publishers (back/front)
     // ----------------------------
+    // ✅ Unique dashboard UID — avoids collision with publisher UID
+    // Generated once per page load; stable across rejoins in the same session
+    const DASH_UID = Math.floor(Math.random() * 900_000_000) + 100_000_000;
+
     async function createAndJoinAgora() {
       if (!DEVICE_ID) return;
 
       // Fetch server-issued token (required — no fallback)
       let agoraToken = null;
       try {
-        const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber');
+        const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber', DASH_UID);
         agoraToken = tokenData.token;
         AGORA_APP_ID = tokenData.app_id;
-        console.log('Agora token fetched for:', DEVICE_ID);
+        console.log('Agora token fetched for:', DEVICE_ID, 'dashUid:', DASH_UID);
       } catch (e) {
         console.error('Agora token fetch failed:', e.message);
         showOverlay(true, 'AUTH FAILED — CANNOT CONNECT TO FEED');
@@ -2583,10 +2582,14 @@
       });
 
       agoraClient.on("user-published", async (user, mediaType) => {
+        console.log('[AGORA] user-published', { uid: user.uid, mediaType });
+
         try {
           await agoraClient.subscribe(user, mediaType);
+          console.log('[AGORA] subscribed', { uid: user.uid, mediaType });
 
           if (mediaType === "video") {
+            console.log('[AGORA] videoTrack?', !!user.videoTrack);
             const slot = pickSlotForUid(user.uid);
             if (!slot) return;
 
@@ -2606,6 +2609,7 @@
           }
 
           if (mediaType === "audio") {
+            console.log('[AGORA] audioTrack?', !!user.audioTrack);
             remoteAudioTrack = user.audioTrack;
             // Only play if user has already clicked unmute (browser autoplay policy)
             if (audioUnmuted) {
@@ -2641,15 +2645,15 @@
       agoraClient.on('token-privilege-will-expire', async () => {
         console.log('Agora token expiring, renewing...');
         try {
-          const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber');
+          const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber', DASH_UID);
           await agoraClient.renewToken(tokenData.token);
-          console.log('Agora token renewed');
+          console.log('Agora token renewed for dashUid:', DASH_UID);
         } catch (e) {
           console.warn('Agora token renewal failed:', e.message);
         }
       });
 
-      await agoraClient.join(appId, DEVICE_ID, agoraToken, 0);
+      await agoraClient.join(appId, DEVICE_ID, agoraToken, DASH_UID);
 
       // Join success — start watchdog
       startFreezeWatchdog();
@@ -2677,6 +2681,16 @@
       }
       freezeStallCount = 0;
       freezeLastTime = -1;
+
+      // ✅ Stop remote tracks + clear player DOM (fixes "worked once then never again")
+      try { if (camTracks.front) { camTracks.front.stop(); } } catch {}
+      camTracks.front = null;
+
+      try { if (remoteAudioTrack) { remoteAudioTrack.stop(); } } catch {}
+      remoteAudioTrack = null;
+
+      clearPlayer();
+      showOverlay(true, 'WAITING FOR FRONT CAM...');
 
       try { if (agoraClient) await agoraClient.leave(); } catch {}
       try { if (agoraClient) agoraClient.removeAllListeners(); } catch {}

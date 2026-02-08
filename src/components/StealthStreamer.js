@@ -8,7 +8,19 @@ import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../lib/supabase";
 // Agora APP_ID is fetched from the token server at runtime.
 // No fallback — token server is required for secure channel access.
 
-async function fetchAgoraToken(channelId, role = "publisher") {
+// ✅ Derive a stable numeric UID from deviceId (FNV-1a → positive 31-bit int)
+// This avoids UID 0 collisions and stays deterministic across reconnects.
+function stableUidFromDeviceId(deviceId) {
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < deviceId.length; i++) {
+    h ^= deviceId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  // Agora UIDs are unsigned 32-bit, but keep it in safe positive range (1 .. 2^31-1)
+  return (h % 0x7FFFFFFE) + 1;
+}
+
+async function fetchAgoraToken(channelId, role = "publisher", uid = 0) {
   const { data: { session } } = await supabase.auth.getSession();
   const jwt = session?.access_token;
   if (!jwt) throw new Error("No auth session for Agora token");
@@ -20,7 +32,7 @@ async function fetchAgoraToken(channelId, role = "publisher") {
       apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${jwt}`,
     },
-    body: JSON.stringify({ device_id: channelId, uid: 0, role }),
+    body: JSON.stringify({ device_id: channelId, uid, role }),
   });
 
   if (!res.ok) {
@@ -250,14 +262,17 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
     if (initLockRef.current) return;
     initLockRef.current = true;
 
+    // ✅ Stable publisher UID derived from deviceId — avoids UID 0 collision with dashboard
+    const publisherUid = stableUidFromDeviceId(channelId);
+
     // Fetch Agora token from server (required — no fallback)
     let agoraToken = null;
     let appId = null;
     try {
-      const tokenData = await fetchAgoraToken(channelId, "publisher");
+      const tokenData = await fetchAgoraToken(channelId, "publisher", publisherUid);
       agoraToken = tokenData.token;
       appId = tokenData.app_id;
-      console.log("✅ Agora token fetched for channel:", channelId);
+      console.log("✅ Agora token fetched for channel:", channelId, "publisherUid:", publisherUid);
     } catch (e) {
       console.error("❌ Agora token fetch failed:", e?.message);
       setEngineState("error");
@@ -364,10 +379,10 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         onTokenPrivilegeWillExpire: async () => {
           console.log("🔄 Agora token expiring, renewing...");
           try {
-            const tokenData = await fetchAgoraToken(channelId, "publisher");
+            const tokenData = await fetchAgoraToken(channelId, "publisher", publisherUid);
             if (agoraEngine.current && typeof agoraEngine.current.renewToken === "function") {
               agoraEngine.current.renewToken(tokenData.token);
-              console.log("✅ Agora token renewed");
+              console.log("✅ Agora token renewed for publisherUid:", publisherUid);
             }
           } catch (e) {
             console.error("❌ Agora token renewal failed:", e?.message);
@@ -454,8 +469,8 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         await applyCameraFacing(defaultFacing);
       } catch {}
 
-      // D) Join the channel with server-issued token
-      await agoraEngine.current.joinChannel(agoraToken, channelId, 0, {});
+      // D) Join the channel with server-issued token (UID must match token)
+      await agoraEngine.current.joinChannel(agoraToken, channelId, publisherUid, {});
     } catch (e) {
       console.error("❌ INIT ERROR:", e);
       if (mountedRef.current) setEngineState("error");
