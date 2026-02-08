@@ -65,6 +65,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
 
   const initLockRef = useRef(false);
   const mountedRef = useRef(true);
+  const retryCountRef = useRef(0);
 
   const [isLive, setIsLive] = useState(false);
   const [engineState, setEngineState] = useState("idle"); // idle | no_channel | expo_go | not_linked | starting | live | error
@@ -393,11 +394,31 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         onConnectionStateChanged: (_connection, state, reason) => {
           console.log(`📡 Agora connection: state=${state} reason=${reason}`);
           if (!mountedRef.current) return;
-          // State 5 = FAILED — connection unrecoverable
+
+          // State 3 = CONNECTED — reset retry counter
+          if (state === 3) {
+            retryCountRef.current = 0;
+          }
+
+          // State 5 = FAILED — auto-retry with backoff (max 3 attempts)
           if (state === 5) {
-            console.error("❌ Agora connection FAILED — attempting rejoin...");
-            setEngineState("error");
+            retryCountRef.current += 1;
+            if (retryCountRef.current > 3) {
+              console.error("❌ Agora: max retries (3) reached, giving up");
+              setEngineState("error");
+              initLockRef.current = false;
+              return;
+            }
+            console.error(`❌ Agora connection FAILED — retry ${retryCountRef.current}/3`);
+            // Clean up current engine before retry
+            try { agoraEngine.current?.leaveChannel(); } catch {}
+            try { agoraEngine.current?.release(); } catch {}
+            agoraEngine.current = null;
             initLockRef.current = false;
+            const backoff = retryCountRef.current * 2000;
+            setTimeout(() => {
+              if (mountedRef.current) initAgoraSafely();
+            }, backoff);
           }
         },
       });

@@ -1195,6 +1195,8 @@
     let freezeLastTime = -1;
     let rejoinInFlight = false;
     let rejoinAttempt = 0;
+    let rejoinTotalAttempts = 0;
+    const MAX_REJOIN_ATTEMPTS = 20;
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -2576,6 +2578,7 @@
         }
         if (curState === "CONNECTED") {
           rejoinAttempt = 0;
+          rejoinTotalAttempts = 0;
           setTopStatus("SIGNAL CONNECTED");
           playActiveCamera();
         }
@@ -2641,6 +2644,20 @@
         }
       });
 
+      // ✅ Handle publisher leaving channel (sudden disconnect, app kill, network drop)
+      agoraClient.on("user-left", (user, reason) => {
+        console.log('[AGORA] user-left', { uid: user.uid, reason });
+        camTracks.front = null;
+        if (remoteAudioTrack) {
+          try { remoteAudioTrack.stop(); } catch {}
+          remoteAudioTrack = null;
+        }
+        clearPlayer();
+        showOverlay(true, 'PUBLISHER DISCONNECTED — WAITING...');
+        setTopStatus('SIGNAL LOST');
+        updateAudioButton();
+      });
+
       // Token renewal: Agora fires this ~30s before expiry
       agoraClient.on('token-privilege-will-expire', async () => {
         console.log('Agora token expiring, renewing...');
@@ -2701,6 +2718,13 @@
       if (rejoinInFlight) return;
       if (!DEVICE_ID) {
         showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
+        return;
+      }
+
+      rejoinTotalAttempts++;
+      if (rejoinTotalAttempts > MAX_REJOIN_ATTEMPTS) {
+        showOverlay(true, 'SOS FEED OFFLINE — PUBLISHER MAY BE DISCONNECTED');
+        setTopStatus('FEED OFFLINE');
         return;
       }
 
