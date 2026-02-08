@@ -44,6 +44,7 @@ import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { getDeviceId } from "../../src/services/Identity";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
+import AlarmService from "../../src/services/AlarmService";
 
 // Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
 let SecureStore = null;
@@ -196,8 +197,9 @@ export default function FleetScreen() {
   const [pinError, setPinError] = useState("");
   const [pinSaving, setPinSaving] = useState(false);
 
-  // ✅ Collapsible panel states (default collapsed to not block fleet members list)
-  const [inviteCodeExpanded, setInviteCodeExpanded] = useState(false);
+  // ✅ Collapsible panel states
+  // Default invite code EXPANDED so first-time users can see & share their code
+  const [inviteCodeExpanded, setInviteCodeExpanded] = useState(true);
   const [pinSectionExpanded, setPinSectionExpanded] = useState(false);
 
   // Throttle realtime refreshes
@@ -212,6 +214,7 @@ export default function FleetScreen() {
   const appStateRef = useRef(AppState.currentState);
   const initialBootDoneRef = useRef(false); // ✅ Prevent boot from running multiple times
   const activeGroupIdRef = useRef(null); // ✅ Track active group to prevent stale subscription data
+  const fetchFleetRef = useRef(null); // ✅ Stable ref for fetchFleet (avoids broadcast channel churn)
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -921,6 +924,9 @@ export default function FleetScreen() {
     [groupId, hydrateNamesForSessions]
   );
 
+  // ✅ Keep ref in sync so broadcast handlers always see latest fetchFleet
+  fetchFleetRef.current = fetchFleet;
+
   // ✅ Handle tab switch between user's OWN fleets (Work/Family)
   // NOTE: Switching tabs only VIEWS the fleet - device stays in its current tracking fleet
   // Device only moves when user explicitly joins a fleet via invite code
@@ -942,10 +948,11 @@ export default function FleetScreen() {
 
     // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
     // NOTE: groupId here is the VIEW fleet (subscriptions + list), not necessarily the device tracking fleet.
+    const cachedCode = fleet.inviteCode || "";
     if (isMountedRef.current) {
       setGroupId(fleet.groupId);
-      setInviteCode(fleet.inviteCode || "");
-      setInviteLoading(false);
+      setInviteCode(cachedCode);
+      setInviteLoading(!cachedCode);
       setWorkers([]);
       setNameByDevice({});
       setRecentCheckIns([]); // ✅ Fix #5: clear stale check-ins from previous fleet
@@ -955,8 +962,22 @@ export default function FleetScreen() {
     // Fetch members for this fleet (view only)
     await fetchFleet(fleet.groupId);
 
+    // ✅ If invite code wasn't in the ownedFleets cache, fetch it now
+    if (!cachedCode && fleet.groupId) {
+      const fetched = await fetchInviteCodeForGroup(fleet.groupId);
+      if (fetched && isMountedRef.current) {
+        setInviteCode(String(fetched));
+        // Also backfill the ownedFleets cache so subsequent switches don't re-fetch
+        setOwnedFleets((prev) => ({
+          ...prev,
+          [tab]: { ...prev[tab], inviteCode: String(fetched) },
+        }));
+      }
+      if (isMountedRef.current) setInviteLoading(false);
+    }
+
     console.log("✅ Viewing", tab, "fleet:", fleet.groupId?.slice(0, 8));
-  }, [activeTab, ownedFleets, fetchFleet]);
+  }, [activeTab, ownedFleets, fetchFleet, fetchInviteCodeForGroup]);
 
   const sortedWorkers = useMemo(() => {
     const arr = Array.isArray(workers) ? [...workers] : [];
@@ -1061,6 +1082,8 @@ export default function FleetScreen() {
         // Device row is the source of truth for tracking
         gidToUse = reconciledGid;
         activeGroupIdRef.current = gidToUse;
+        // Pull invite code from ownedFleets cache if available
+        codeToUse = fleets?.family?.inviteCode || fleets?.work?.inviteCode || null;
       } else if (fleets) {
         // No device row yet — use ensured fleet for VIEW only (don't stomp storage)
         const defaultFleet = fleets.family || fleets.work;
@@ -1068,17 +1091,28 @@ export default function FleetScreen() {
           gidToUse = defaultFleet.groupId;
           codeToUse = defaultFleet.inviteCode;
           activeGroupIdRef.current = gidToUse;
-          if (isMountedRef.current) {
-            setGroupId(gidToUse);
-            setInviteCode(codeToUse || "");
-            setInviteLoading(false);
-          }
         }
       } else {
         // Fall back to cached context
         const cachedGid = await loadFleetContext();
         gidToUse = cachedGid;
         if (gidToUse) activeGroupIdRef.current = gidToUse;
+      }
+
+      // Set invite code from cache, or fetch if missing
+      if (isMountedRef.current && gidToUse) {
+        setGroupId(gidToUse);
+        if (codeToUse) {
+          setInviteCode(String(codeToUse));
+          setInviteLoading(false);
+        } else {
+          setInviteLoading(true);
+          const fetched = await fetchInviteCodeForGroup(gidToUse);
+          if (isMountedRef.current) {
+            setInviteCode(fetched ? String(fetched) : "");
+            setInviteLoading(false);
+          }
+        }
       }
 
       await fetchFleet(gidToUse);
@@ -1088,7 +1122,7 @@ export default function FleetScreen() {
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
-  }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow, ensureUserFleets]);
+  }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow, ensureUserFleets, fetchInviteCodeForGroup]);
 
   // ✅ Force retry boot (resets the boot guard so boot() can run again)
   const retryBoot = useCallback(() => {
@@ -1158,7 +1192,7 @@ export default function FleetScreen() {
       if (prev.match(/inactive|background/) && nextState === "active") {
         // ✅ Fix #6: use ref to avoid stale closure over groupId
         const gid = activeGroupIdRef.current;
-        if (gid) fetchFleet(gid);
+        if (gid && fetchFleetRef.current) fetchFleetRef.current(gid);
       }
     });
 
@@ -1167,7 +1201,7 @@ export default function FleetScreen() {
         sub?.remove?.();
       } catch {}
     };
-  }, [groupId, fetchFleet]);
+  }, [groupId]);
 
   useEffect(() => {
     if (pgChannelRef.current) {
@@ -1202,7 +1236,7 @@ export default function FleetScreen() {
             refetchTimerRef.current = null;
             // Double-check still active before fetching
             if (activeGroupIdRef.current && groupId !== activeGroupIdRef.current) return;
-            fetchFleet(groupId);
+            if (fetchFleetRef.current) fetchFleetRef.current(groupId);
           }, 800);
         }
       )
@@ -1222,7 +1256,7 @@ export default function FleetScreen() {
         pgChannelRef.current = null;
       }
     };
-  }, [groupId, fetchFleet]);
+  }, [groupId]);
 
   useEffect(() => {
     if (broadcastChannelRef.current) {
@@ -1256,7 +1290,8 @@ export default function FleetScreen() {
           });
         }
 
-        fetchFleet(subscribedGroup);
+        // ✅ Use ref to avoid stale closure (fetchFleet removed from deps)
+        if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
 
         setTimeout(() => {
           if (!isMountedRef.current) return;
@@ -1266,6 +1301,25 @@ export default function FleetScreen() {
             return prev;
           });
         }, 12500);
+      })
+      // ✅ FIX: Listen for SOS cancel so fleet page updates immediately
+      .on("broadcast", { event: "sos_cancel" }, (payload) => {
+        if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) return;
+
+        const p = payload?.payload || payload;
+        const device_id = p?.device_id || p?.deviceId || "Unknown";
+        console.log("✅ SOS cancel broadcast received:", device_id);
+
+        // Clear the SOS banner immediately
+        if (isMountedRef.current) {
+          setIncomingSos(null);
+        }
+
+        // Refresh fleet data so worker cards drop SOS status
+        if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
+
+        // ✅ Safety backup: stop alarm in case SOSAlertManager's channel missed the cancel
+        try { AlarmService.stopAlarm(); } catch {}
       })
       .on("broadcast", { event: "check_in" }, (payload) => {
         // ✅ Check-in broadcast received — ignore if fleet changed
@@ -1309,7 +1363,10 @@ export default function FleetScreen() {
         broadcastChannelRef.current = null;
       }
     };
-  }, [groupId, fetchFleet]);
+    // ✅ FIX: Removed fetchFleet from deps — use fetchFleetRef instead.
+    // This prevents unnecessary channel teardown/recreation that could
+    // disrupt SOSAlertManager's channel on the same topic.
+  }, [groupId]);
 
   // =========================
   // ✅ Switch Fleet flow (Baby Step 3)

@@ -1598,6 +1598,7 @@
       }
 
       // Update active SOS list
+      const prevSOSCount = activeSOSList.length;
       activeSOSList = fleetMembers.filter(m => m.status === 'SOS');
 
       updateMembersList();
@@ -1607,6 +1608,12 @@
       // If currently viewing this member, update the main display
       if (selectedSOSDeviceId === deviceId || DEVICE_ID === deviceId) {
         updatePosition(data);
+      }
+
+      // Auto-connect to new SOS if nothing is selected yet
+      const newStatus = data.status || 'OFFLINE';
+      if (newStatus === 'SOS' && !selectedSOSDeviceId) {
+        selectSOSMember(deviceId);
       }
     }
 
@@ -1634,7 +1641,10 @@
       sorted.forEach(member => {
         const row = document.createElement('div');
         row.className = `member-row ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
-        row.onclick = () => focusOnMember(member);
+        row.onclick = () => {
+          focusOnMember(member);
+          if (member.status === 'SOS') selectSOSMember(member.deviceId);
+        };
 
         const dot = document.createElement('div');
         dot.className = `member-row-dot ${member.status === 'SOS' ? 'sos' : ''} ${member.status === 'OFFLINE' ? 'offline' : ''}`;
@@ -1739,7 +1749,10 @@
             }</div>
           `;
 
-          el.onclick = () => focusOnMember(member);
+          el.onclick = () => {
+            focusOnMember(member);
+            if (member.status === 'SOS') selectSOSMember(member.deviceId);
+          };
 
           const newMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
             .setLngLat([lng, lat])
@@ -1763,14 +1776,13 @@
         bearing: -15,
         duration: 800
       });
-
-      if (member.status === 'SOS') {
-        selectSOSMember(member.deviceId);
-      }
     }
 
     async function selectSOSMember(deviceId) {
       if (!deviceId) return;
+
+      // Skip if already selected and video is running (prevents infinite loop)
+      if (selectedSOSDeviceId === deviceId && agoraClient) return;
 
       selectedSOSDeviceId = deviceId;
       DEVICE_ID = deviceId; // Update global device ID for video
@@ -1785,7 +1797,7 @@
       showOverlay(true, 'CONNECTING TO SOS FEED...');
       await startVideo();
 
-      // Focus map on this member
+      // Focus map on this member (map pan only — no recursion)
       const member = fleetMembers.find(m => m.deviceId === deviceId);
       if (member) focusOnMember(member);
 
@@ -2637,7 +2649,7 @@
         }
       });
 
-      await agoraClient.join(appId, DEVICE_ID, agoraToken, null);
+      await agoraClient.join(appId, DEVICE_ID, agoraToken, 0);
 
       // Join success — start watchdog
       startFreezeWatchdog();
