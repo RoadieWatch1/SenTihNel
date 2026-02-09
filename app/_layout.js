@@ -209,6 +209,19 @@ function AuthGate() {
         // ✅ Handshake on boot
         await maybeHandshake(session, groupId);
 
+        // ✅ Cleanup orphaned devices from previous installs (marks old device_ids OFFLINE)
+        try {
+          const currentDeviceId = await AsyncStorage.getItem("sentinel_device_id");
+          if (currentDeviceId && session?.user?.id) {
+            supabase.rpc("cleanup_orphaned_devices", {
+              p_user_id: session.user.id,
+              p_current_device_id: currentDeviceId,
+            }).then(({ data }) => {
+              if (data > 0) console.log(`✅ Cleaned up ${data} orphaned device(s) from previous installs`);
+            }).catch(() => {});
+          }
+        } catch {}
+
         // ✅ Logged in + has fleet -> must be in app
         if (!inAppGroup) safeReplace("/(app)/home");
         return;

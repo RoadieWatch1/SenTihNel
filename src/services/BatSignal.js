@@ -840,16 +840,30 @@ export const sendBatSignal = async (arg) => {
   // Force immediate SOS sync using last-known coords if we have them
   await safeForceSOSSync({ lat: fastLat, lng: fastLng, accuracy: fastAcc });
 
-  // Fleet-wide in-app alert (realtime broadcast)
-  const broadcastOk = await tryBroadcastSOS({
-    groupId,
-    deviceId,
-    displayName,
-    link: fullLink,
-    lat: fastLat,
-    lng: fastLng,
-  });
-  if (broadcastOk) console.log("✅ SOS broadcast delivered (in-app)");
+  // Fleet-wide in-app alert (realtime broadcast) — with retry on failure
+  const broadcastArgs = { groupId, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng };
+  const broadcastOk = await tryBroadcastSOS(broadcastArgs);
+  if (broadcastOk) {
+    console.log("✅ SOS broadcast delivered (in-app)");
+  } else {
+    // ✅ Broadcast failed (network saturated or down) — retry in background
+    // This is critical: if broadcast doesn't reach fleet, they won't know about the SOS
+    console.log("⚠️ SOS broadcast failed — scheduling retries in background");
+    (async () => {
+      for (let retry = 1; retry <= 3; retry++) {
+        await sleep(5000); // Wait 5s between retries (network may recover)
+        try {
+          const ok = await tryBroadcastSOS(broadcastArgs);
+          if (ok) {
+            console.log(`✅ SOS broadcast retry #${retry} succeeded`);
+            return;
+          }
+        } catch {}
+        console.log(`⚠️ SOS broadcast retry #${retry} failed`);
+      }
+      console.log("⚠️ SOS broadcast: all retries exhausted (push notifications are the fallback)");
+    })();
+  }
 
   // Trigger push notifications for background/offline users (fallback if pg_net unavailable)
   triggerPushNotifications({ deviceId, groupId, displayName, lat: fastLat, lng: fastLng });

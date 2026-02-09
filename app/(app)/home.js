@@ -277,6 +277,22 @@ export default function HomePage() {
       setDeviceId(finalId);
       registerForBatSignal();
 
+      // ✅ Cold-start SOS recovery: If app was killed mid-SOS, restore FakeLockScreen
+      // so the user can enter their PIN to cancel. Without this, SOS stays active
+      // in the DB but the user sees the normal home screen.
+      try {
+        const sosFlag = await AsyncStorage.getItem(STORAGE_KEY_SOS);
+        if (sosFlag === "1") {
+          console.log("⚠️ Cold-start SOS recovery: SOS was active before app kill — restoring FakeLockScreen");
+          // Clear stale cloud recording flag so a new recording can start if needed
+          try {
+            await AsyncStorage.removeItem(`sentinel_cloudrec_started:${finalId}`);
+          } catch {}
+          setIsSOS(true);
+          setSosStartTime(Date.now());
+        }
+      } catch {}
+
       // ✅ Check if user has set up their SOS PIN
       try {
         const { data } = await supabase.rpc("has_user_sos_pin");
@@ -468,7 +484,7 @@ export default function HomePage() {
 
     setTimeout(() => {
       sosLockRef.current = false;
-    }, 1200);
+    }, 3000);
   };
 
   // ✅ Keep triggerSOS ref in sync for notification listener

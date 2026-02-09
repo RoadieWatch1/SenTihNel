@@ -12,9 +12,34 @@ import {
 import SOSAlertOverlay from "../../src/components/SOSAlertOverlay";
 import SOSAlertManager from "../../src/services/SOSAlertManager";
 import AlarmService from "../../src/services/AlarmService";
+import { cancelBatSignal } from "../../src/services/BatSignal";
+import { clearSOS, stopLiveTracking } from "../../src/services/LiveTracker";
 
 function CustomDrawerContent(props) {
   const handleLogout = async () => {
+    // ✅ Stop SOS + tracking BEFORE signing out
+    // Prevents orphaned SOS state in DB when user logs out mid-emergency
+    try {
+      await Promise.race([
+        (async () => {
+          await clearSOS();           // Clear SOS flag in AsyncStorage
+          await stopLiveTracking();   // Stop GPS + mark OFFLINE in DB
+          await cancelBatSignal();    // Broadcast cancel + cleanup
+        })(),
+        new Promise((r) => setTimeout(r, 5000)), // Hard 5s timeout — never block logout
+      ]);
+    } catch (e) {
+      console.log("⚠️ Pre-logout cleanup error (non-fatal):", e?.message || e);
+    }
+
+    // ✅ Remove push token from server so stale notifications aren't sent
+    try {
+      const deviceId = await AsyncStorage.getItem("sentinel_device_id");
+      if (deviceId) {
+        await supabase.from("push_tokens").delete().eq("device_id", deviceId);
+      }
+    } catch {}
+
     globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
     try { supabase.auth.stopAutoRefresh(); } catch {}
     await supabase.auth.signOut({ scope: "local" });
