@@ -1,0 +1,29 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="56dp"
+    android:height="56dp"
+    android:viewportWidth="56"
+    android:viewportHeight="56">
+
+    <!-- Shield body (gold border) -->
+    <path
+        android:pathData="M28,4 C17,4 8,5.5 8,14 L8,27 C8,35 17,44 28,50 C39,44 48,35 48,27 L48,14 C48,5.5 39,4 28,4 Z"
+        android:fillColor="#C8A23D"/>
+
+    <!-- Shield inner fill (flat teal) -->
+    <path
+        android:pathData="M28,8 C19.5,8 12,9 12,16 L12,26.5 C12,33 19,40.5 28,46 C37,40.5 44,33 44,26.5 L44,16 C44,9 36.5,8 28,8 Z"
+        android:fillColor="#0D9488"/>
+
+    <!-- Gold circle ring (center decoration) -->
+    <path
+        android:pathData="M28,16 A10,10 0 1,1 28,36 A10,10 0 1,1 28,16 Z"
+        android:fillColor="#00000000"
+        android:strokeWidth="2"
+        android:strokeColor="#C8A23D"/>
+
+    <!-- Gold center dot -->
+    <path
+        android:pathData="M28,23.5 A2.5,2.5 0 1,1 28,28.5 A2.5,2.5 0 1,1 28,23.5 Z"
+        android:fillColor="#C8A23D"/>
+
+</vector>

@@ -41,6 +41,7 @@ import { getDeviceId as getStableDeviceId } from "../../src/services/Identity"; 
 import { supabase } from "../../src/lib/supabase";
 
 import FloatingSOSButton from "../../src/services/FloatingSOSButton";
+import * as SecureStore from "expo-secure-store";
 
 // ✅ Must match Auth + LiveTracker key
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
@@ -293,10 +294,48 @@ export default function HomePage() {
         }
       } catch {}
 
-      // ✅ Check if user has set up their SOS PIN
+      // ✅ Check if user has set up their SOS PIN + restore from cloud after reinstall
       try {
         const { data } = await supabase.rpc("has_user_sos_pin");
-        setHasPin(data?.has_pin === true);
+        const pinExists = data?.has_pin === true;
+        setHasPin(pinExists);
+
+        // ✅ PIN recovery: if cloud has a PIN but local storage is empty (reinstall),
+        // pull the hash back so offline SOS cancel works on this device.
+        if (pinExists) {
+          // Check SecureStore first (can survive some reinstalls), then AsyncStorage
+          let localHash = null;
+          try {
+            if (SecureStore?.getItemAsync) {
+              localHash = await SecureStore.getItemAsync("sentinel_pin_hash");
+            }
+          } catch {}
+          if (!localHash) {
+            try { localHash = await AsyncStorage.getItem("sentinel_pin_hash"); } catch {}
+          }
+
+          if (!localHash) {
+            try {
+              const { data: pinRow } = await supabase
+                .from("user_sos_pins")
+                .select("pin_hash")
+                .limit(1)
+                .maybeSingle();
+              if (pinRow?.pin_hash) {
+                // Write to both SecureStore + AsyncStorage for full coverage
+                try {
+                  if (SecureStore?.setItemAsync) {
+                    await SecureStore.setItemAsync("sentinel_pin_hash", pinRow.pin_hash);
+                  }
+                } catch {}
+                await AsyncStorage.setItem("sentinel_pin_hash", pinRow.pin_hash);
+                console.log("✅ PIN hash restored from cloud on home boot (reinstall recovery)");
+              }
+            } catch (e) {
+              console.log("PIN recovery failed (non-fatal):", e?.message || e);
+            }
+          }
+        }
       } catch {
         setHasPin(false);
       }

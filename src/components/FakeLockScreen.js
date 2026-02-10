@@ -169,10 +169,30 @@ export default function FakeLockScreen({ onUnlock }) {
       }
       // If "No PIN set" server-side, stay locked (user must set a PIN from fleet screen)
     } catch (e) {
-      console.log("PIN verification error (falling back to local cache):", e?.message || e);
-      // Supabase unreachable — verify against locally cached PIN hash only
+      console.log("PIN verification error (falling back to local/cloud cache):", e?.message || e);
       const hashed = hashPin(inputPin);
-      const cachedHash = await readPinHash();
+
+      // 1) Check local cache first (fastest)
+      let cachedHash = await readPinHash();
+
+      // 2) If local cache is empty (reinstall), try pulling PIN hash from cloud
+      if (!cachedHash) {
+        try {
+          const { data: pinRow } = await withTimeout(
+            supabase.from("user_sos_pins").select("pin_hash").limit(1).maybeSingle(),
+            5000
+          );
+          if (pinRow?.pin_hash) {
+            cachedHash = pinRow.pin_hash;
+            // Restore to local storage for future offline use
+            await writePinHash(cachedHash);
+            console.log("✅ PIN hash restored from cloud during SOS verify fallback");
+          }
+        } catch (fetchErr) {
+          console.log("PIN cloud fetch also failed:", fetchErr?.message || fetchErr);
+        }
+      }
+
       if (cachedHash && cachedHash === hashed) {
         isValid = true;
       }

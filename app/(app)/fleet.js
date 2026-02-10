@@ -42,7 +42,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { getDeviceId } from "../../src/services/Identity";
-import { forceOneShotSync } from "../../src/services/LiveTracker";
+import { rebindTrackerToLatestFleet } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import AlarmService from "../../src/services/AlarmService";
 
@@ -99,7 +99,10 @@ const hashPin = (pin) => {
 const GUARDIAN_DASHBOARD_URL = "https://sentihnel.com/";
 
 // Local UI rule: if a device hasn't updated recently, show it as OFFLINE
-const OFFLINE_AFTER_MS = 3 * 60 * 1000; // 3 minutes
+const OFFLINE_AFTER_MS = 5 * 60 * 1000; // 5 minutes
+
+// Hide devices that have been OFFLINE for over 30 minutes (orphaned from reinstall/old install)
+const HIDE_STALE_DEVICE_MS = 30 * 60 * 1000; // 30 minutes
 
 // ✅ Battery warning thresholds
 const BATTERY_LOW_THRESHOLD = 20;      // Yellow warning
@@ -583,21 +586,42 @@ export default function FleetScreen() {
   }, [groupId, resolveIsAdmin]);
 
   // ✅ Check if user has SOS PIN set (falls back to local cache if Supabase is unreachable)
+  // ✅ Also restores PIN hash from cloud to local storage after app reinstall
   const checkHasPin = useCallback(async () => {
     try {
       const { data, error } = await supabase.rpc(RPC_HAS_SOS_PIN);
       if (error) {
         console.log("checkHasPin warning:", error.message);
-        // Fall back to local cache
         const cached = await readPinHash();
         if (isMountedRef.current) setHasPin(!!cached);
         return;
       }
       const result = data?.has_pin === true;
       if (isMountedRef.current) setHasPin(result);
+
+      // ✅ PIN recovery: if cloud has a PIN but local storage is empty (reinstall),
+      // pull the hash back into local storage so offline SOS cancel works.
+      if (result) {
+        const localHash = await readPinHash();
+        if (!localHash) {
+          try {
+            const { data: pinRow, error: pinErr } = await supabase
+              .from("user_sos_pins")
+              .select("pin_hash")
+              .limit(1)
+              .maybeSingle();
+
+            if (!pinErr && pinRow?.pin_hash) {
+              await writePinHash(pinRow.pin_hash);
+              console.log("✅ PIN hash restored from cloud to local storage (reinstall recovery)");
+            }
+          } catch (e) {
+            console.log("PIN recovery from cloud failed (non-fatal):", e?.message || e);
+          }
+        }
+      }
     } catch (e) {
       console.log("checkHasPin error:", e?.message || e);
-      // Fall back to local cache
       try {
         const cached = await readPinHash();
         if (isMountedRef.current) setHasPin(!!cached);
@@ -928,8 +952,7 @@ export default function FleetScreen() {
   fetchFleetRef.current = fetchFleet;
 
   // ✅ Handle tab switch between user's OWN fleets (Work/Family)
-  // NOTE: Switching tabs only VIEWS the fleet - device stays in its current tracking fleet
-  // Device only moves when user explicitly joins a fleet via invite code
+  // Device MOVES to the selected fleet so user always sees their own device in the active tab.
   const handleTabSwitch = useCallback(async (tab) => {
     if (tab === activeTab) return;
 
@@ -942,12 +965,10 @@ export default function FleetScreen() {
     // ✅ Set active group ref FIRST to prevent stale subscription callbacks
     activeGroupIdRef.current = fleet.groupId;
 
-    // Update tab state (VIEW only - don't change tracking fleet)
+    // Update tab state
     setActiveTab(tab);
-    setSwitchFleetType(tab); // ✅ Fix #1: keep switch modal in sync with active tab
+    setSwitchFleetType(tab);
 
-    // ✅ Update VIEW state but DON'T update AsyncStorage (device stays in current tracking fleet)
-    // NOTE: groupId here is the VIEW fleet (subscriptions + list), not necessarily the device tracking fleet.
     const cachedCode = fleet.inviteCode || "";
     if (isMountedRef.current) {
       setGroupId(fleet.groupId);
@@ -955,11 +976,29 @@ export default function FleetScreen() {
       setInviteLoading(!cachedCode);
       setWorkers([]);
       setNameByDevice({});
-      setRecentCheckIns([]); // ✅ Fix #5: clear stale check-ins from previous fleet
-      setIncomingSos(null);  // ✅ Fix #5: clear stale SOS from previous fleet
+      setRecentCheckIns([]);
+      setIncomingSos(null);
     }
 
-    // Fetch members for this fleet (view only)
+    // ✅ Move device tracking to the selected fleet so the user's own device appears here
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, fleet.groupId);
+      await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
+      if (cachedCode) {
+        await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, cachedCode);
+      }
+    } catch (e) {
+      console.log("Tab switch AsyncStorage error:", e?.message || e);
+    }
+
+    // ✅ Rebind tracker caches + handshake device to new fleet + force GPS sync
+    try {
+      await rebindTrackerToLatestFleet(`tab_switch_${tab}`);
+    } catch (e) {
+      console.log("Tab switch rebind error:", e?.message || e);
+    }
+
+    // Fetch members for this fleet
     await fetchFleet(fleet.groupId);
 
     // ✅ If invite code wasn't in the ownedFleets cache, fetch it now
@@ -967,7 +1006,6 @@ export default function FleetScreen() {
       const fetched = await fetchInviteCodeForGroup(fleet.groupId);
       if (fetched && isMountedRef.current) {
         setInviteCode(String(fetched));
-        // Also backfill the ownedFleets cache so subsequent switches don't re-fetch
         setOwnedFleets((prev) => ({
           ...prev,
           [tab]: { ...prev[tab], inviteCode: String(fetched) },
@@ -976,11 +1014,22 @@ export default function FleetScreen() {
       if (isMountedRef.current) setInviteLoading(false);
     }
 
-    console.log("✅ Viewing", tab, "fleet:", fleet.groupId?.slice(0, 8));
+    console.log("✅ Switched to", tab, "fleet:", fleet.groupId?.slice(0, 8));
   }, [activeTab, ownedFleets, fetchFleet, fetchInviteCodeForGroup]);
 
   const sortedWorkers = useMemo(() => {
+    const now = Date.now();
     const arr = Array.isArray(workers) ? [...workers] : [];
+
+    // Filter out devices that have been OFFLINE for over 30 minutes
+    // (orphaned devices from reinstalls / old installs)
+    const visible = arr.filter((w) => {
+      const status = computeDisplayStatus(w);
+      if (status === "SOS" || status === "ACTIVE") return true;
+      // OFFLINE: only show if last update was within HIDE_STALE_DEVICE_MS
+      const t = w?.last_updated ? new Date(w.last_updated).getTime() : 0;
+      return t > 0 && (now - t) < HIDE_STALE_DEVICE_MS;
+    });
 
     const rank = (s) => {
       if (s === "SOS") return 0;
@@ -989,7 +1038,7 @@ export default function FleetScreen() {
       return 3;
     };
 
-    arr.sort((a, b) => {
+    visible.sort((a, b) => {
       const sa = computeDisplayStatus(a);
       const sb = computeDisplayStatus(b);
 
@@ -1002,7 +1051,7 @@ export default function FleetScreen() {
       return bTime - aTime;
     });
 
-    return arr;
+    return visible;
   }, [workers]);
 
   const hasSOS = useMemo(() => sortedWorkers.some((w) => computeDisplayStatus(w) === "SOS"), [sortedWorkers]);
@@ -1496,9 +1545,9 @@ export default function FleetScreen() {
       // 6) Refresh fleet list in the new group
       await fetchFleet(newGroupId);
 
-      // 7) Force immediate tracking bind to new fleet
+      // 7) Rebind tracker caches + handshake + force GPS sync to new fleet
       try {
-        await forceOneShotSync();
+        await rebindTrackerToLatestFleet("switch_fleet");
       } catch {}
 
       // Close modal

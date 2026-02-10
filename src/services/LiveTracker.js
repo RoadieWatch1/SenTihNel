@@ -397,8 +397,10 @@ const ensureMemberOfGroup = async (userId, groupId) => {
     if (memberError) console.log("🟡 MEMBERSHIP CHECK ERROR:", memberError.message || memberError);
     return false;
   } catch (e) {
-    membershipCache = { userId, groupId, ok: false, checkedAt: now };
-    return false;
+    // ✅ Network/timeout exceptions: don't cache as false — allow upload to proceed
+    // so the device doesn't go invisible during transient connectivity issues.
+    console.log("🟡 MEMBERSHIP CHECK EXCEPTION (allowing upload):", e?.message || e);
+    return true;
   }
 };
 
@@ -423,19 +425,27 @@ const ensureDeviceBoundToUserAndGroup = async (userId, deviceId, groupId, { forc
   }
 
   try {
-    const res = await handshakeDevice({ groupId, deviceId });
-    const ok = !!res?.ok;
+    let res = await handshakeDevice({ groupId, deviceId });
+    let ok = !!res?.ok;
+
+    // ✅ Single retry on failure (covers transient network blips)
+    if (!ok) {
+      console.log("🟡 DEVICE HANDSHAKE FAILED, retrying once:", res?.error || "Unknown error");
+      await new Promise((r) => setTimeout(r, 1500));
+      res = await handshakeDevice({ groupId, deviceId });
+      ok = !!res?.ok;
+    }
 
     bindCache = { userId, deviceId, groupId, ok, checkedAt: now };
 
     if (!ok) {
-      console.log("🟡 DEVICE HANDSHAKE FAILED:", res?.error || "Unknown error");
+      console.log("🟡 DEVICE HANDSHAKE FAILED after retry:", res?.error || "Unknown error");
     }
 
     return ok;
   } catch (e) {
-    bindCache = { userId, deviceId, groupId, ok: false, checkedAt: now };
-    console.log("🟡 DEVICE HANDSHAKE EXCEPTION:", e?.message || e);
+    // ✅ Network exception: don't cache as false — allow next upload to retry immediately
+    console.log("🟡 DEVICE HANDSHAKE EXCEPTION (not caching):", e?.message || e);
     return false;
   }
 };
@@ -457,24 +467,34 @@ const claimTrackingDeviceIfNeeded = async (deviceId, groupId, { force = false } 
   }
 
   try {
-    const { error } = await supabase.rpc(RPC_CLAIM_TRACKING_DEVICE, {
+    let { error } = await supabase.rpc(RPC_CLAIM_TRACKING_DEVICE, {
       p_device_id: deviceId,
       p_group_id: groupId,
     });
+
+    // ✅ Single retry on failure (covers race where old row hasn't been released yet)
+    if (error) {
+      console.log("🟡 CLAIM DEVICE RPC ERROR, retrying once:", error.message || error);
+      await new Promise((r) => setTimeout(r, 1500));
+      ({ error } = await supabase.rpc(RPC_CLAIM_TRACKING_DEVICE, {
+        p_device_id: deviceId,
+        p_group_id: groupId,
+      }));
+    }
 
     const ok = !error;
     claimCache = { deviceId, groupId, ok, checkedAt: now };
 
     if (error) {
-      console.log("🟡 CLAIM DEVICE RPC ERROR:", error.message || error);
+      console.log("🟡 CLAIM DEVICE RPC ERROR after retry:", error.message || error);
     } else {
-      console.log("✅ CLAIMED TRACKING DEVICE (stale row removed):", deviceId);
+      console.log("✅ CLAIMED TRACKING DEVICE (stale row moved):", deviceId);
     }
 
     return ok;
   } catch (e) {
-    claimCache = { deviceId, groupId, ok: false, checkedAt: now };
-    console.log("🟡 CLAIM DEVICE RPC FAILED:", e?.message || e);
+    // ✅ Network exception: don't cache as false — allow next upload to retry immediately
+    console.log("🟡 CLAIM DEVICE RPC EXCEPTION (not caching):", e?.message || e);
     return false;
   }
 };
