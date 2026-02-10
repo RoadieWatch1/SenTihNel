@@ -16,6 +16,8 @@ import { cancelBatSignal } from "../../src/services/BatSignal";
 import { clearSOS, stopLiveTracking } from "../../src/services/LiveTracker";
 
 function CustomDrawerContent(props) {
+  const router = useRouter();
+
   const handleLogout = async () => {
     // ✅ Stop SOS + tracking BEFORE signing out
     // Prevents orphaned SOS state in DB when user logs out mid-emergency
@@ -42,8 +44,11 @@ function CustomDrawerContent(props) {
 
     globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
     try { supabase.auth.stopAutoRefresh(); } catch {}
-    await supabase.auth.signOut({ scope: "local" });
-    // Root AuthGate will route user to /(auth)/auth
+    try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+
+    // ✅ Explicit redirect — don't rely solely on AuthGate event listener
+    // (onAuthStateChange can silently fail in production/EAS builds)
+    try { router.replace("/(auth)/auth"); } catch {}
   };
 
   return (

@@ -67,6 +67,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
   const initLockRef = useRef(false);
   const mountedRef = useRef(true);
   const retryCountRef = useRef(0);
+  const eventHandlerRef = useRef(null);
 
   const [isLive, setIsLive] = useState(false);
   const [engineState, setEngineState] = useState("idle"); // idle | no_channel | expo_go | not_linked | starting | live | error
@@ -180,6 +181,14 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
           agoraEngine.current.stopPreview();
         }
       } catch {}
+
+      // ✅ Unregister event handler to prevent accumulation on remounts
+      try {
+        if (eventHandlerRef.current && typeof agoraEngine.current.unregisterEventHandler === "function") {
+          agoraEngine.current.unregisterEventHandler(eventHandlerRef.current);
+        }
+      } catch {}
+      eventHandlerRef.current = null;
 
       try {
         agoraEngine.current.leaveChannel();
@@ -353,7 +362,8 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
       agoraEngine.current = createAgoraRtcEngine();
       agoraEngine.current.initialize({ appId });
 
-      agoraEngine.current.registerEventHandler({
+      // ✅ Store handler ref so we can unregister on unmount (prevents leak)
+      eventHandlerRef.current = {
         onJoinChannelSuccess: async (_connection, uid) => {
           console.log(`✅ LIVE: Joined ${channelId} as User ${uid}`);
           if (!mountedRef.current) return;
@@ -436,7 +446,8 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
             }, backoff);
           }
         },
-      });
+      };
+      agoraEngine.current.registerEventHandler(eventHandlerRef.current);
 
       // C) Configure for Live Broadcasting
       agoraEngine.current.setChannelProfile(ChannelProfileType.ChannelProfileLiveBroadcasting);

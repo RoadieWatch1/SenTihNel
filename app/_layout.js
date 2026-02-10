@@ -241,7 +241,7 @@ function AuthGate() {
         if (!session) {
           globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
           try { supabase.auth.stopAutoRefresh(); } catch {}
-          await clearSensitiveStorage();
+          try { await clearSensitiveStorage(); } catch {}
           resetGateState();
           safeReplace("/(auth)/auth");
           return;

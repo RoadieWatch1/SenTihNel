@@ -70,6 +70,16 @@ if (Platform.OS !== "web") {
 
         if (state === "active") {
           supabase.auth.startAutoRefresh();
+
+          // ✅ Proactively refresh session if token expired while backgrounded
+          // startAutoRefresh handles this internally, but we belt-and-suspenders
+          // to ensure DB operations don't hit a stale token window.
+          supabase.auth.getSession().then(({ data }) => {
+            const expiresAt = data?.session?.expires_at;
+            if (expiresAt && expiresAt * 1000 < Date.now() + 60_000) {
+              supabase.auth.refreshSession().catch(() => {});
+            }
+          }).catch(() => {});
         } else {
           supabase.auth.stopAutoRefresh();
         }

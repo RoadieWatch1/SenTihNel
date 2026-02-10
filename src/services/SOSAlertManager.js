@@ -424,20 +424,18 @@ function setupAppStateListener() {
         await checkForResolvedAlerts(currentGroupId);
       }
 
-      // ✅ FIX: If channel was in error state, retry connection on app resume
-      if (channelRetryCount >= MAX_CHANNEL_RETRIES && currentGroupId) {
-        console.log("SOSAlertManager: Retrying channels on app resume");
-        channelRetryCount = 0; // Reset counter
+      // ✅ Always reconnect channels on foreground resume.
+      // WebSocket may have silently died during long background sessions (hours/days).
+      // Fresh connections guarantee we receive SOS broadcasts.
+      if (currentGroupId) {
+        console.log("SOSAlertManager: Reconnecting channels on app resume");
+        channelRetryCount = 0;
         if (realtimeChannel) {
-          try {
-            await supabase.removeChannel(realtimeChannel);
-          } catch {}
+          try { await supabase.removeChannel(realtimeChannel); } catch {}
           realtimeChannel = null;
         }
         if (dbWatchChannel) {
-          try {
-            await supabase.removeChannel(dbWatchChannel);
-          } catch {}
+          try { await supabase.removeChannel(dbWatchChannel); } catch {}
           dbWatchChannel = null;
         }
         subscribeToRealtimeChannel(currentGroupId);

@@ -122,6 +122,21 @@ const isRlsError = (err) => {
   );
 };
 
+// ✅ Detect expired/invalid auth token errors (long background sessions)
+const isAuthError = (err) => {
+  const msg = String(err?.message || err || "").toLowerCase();
+  const code = err?.code || err?.status || "";
+  return (
+    String(code) === "401" ||
+    msg.includes("jwt expired") ||
+    msg.includes("invalid jwt") ||
+    msg.includes("token is expired") ||
+    msg.includes("not authenticated") ||
+    msg.includes("invalid claim") ||
+    msg.includes("pgrst301")
+  );
+};
+
 const setIfAllowed = (payload, key, value) => {
   const flagName = `has_${key}`;
   if (!Object.prototype.hasOwnProperty.call(SCHEMA_FLAGS, flagName)) return;
@@ -687,7 +702,7 @@ const processUpload = async (location, { isPoorGps, statusOverride = null }) => 
   );
 
   // ✅ Use SECURITY DEFINER RPC to bypass all RLS issues
-  const { data: rpcResult, error: rpcError } = await supabase.rpc("upsert_tracking_session", {
+  const rpcParams = {
     p_device_id: deviceId,
     p_group_id: groupId,
     p_data: {
@@ -701,7 +716,23 @@ const processUpload = async (location, { isPoorGps, statusOverride = null }) => 
       speed: payload.speed,
       heading: payload.heading,
     },
-  });
+  };
+
+  let { data: rpcResult, error: rpcError } = await supabase.rpc("upsert_tracking_session", rpcParams);
+
+  // ✅ If auth token expired (long background session), refresh and retry once
+  if (rpcError && isAuthError(rpcError)) {
+    console.log("🔄 SYNC: Auth error — refreshing session and retrying once...");
+    try {
+      await supabase.auth.refreshSession();
+      const retry = await supabase.rpc("upsert_tracking_session", rpcParams);
+      rpcResult = retry.data;
+      rpcError = retry.error;
+    } catch (refreshErr) {
+      console.log("❌ SYNC: Session refresh failed:", refreshErr?.message || refreshErr);
+      return;
+    }
+  }
 
   // Check if RPC returned an error in the response
   if (rpcResult?.ok === false) {
