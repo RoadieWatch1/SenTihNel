@@ -41,7 +41,11 @@ import { getDeviceId as getStableDeviceId } from "../../src/services/Identity"; 
 import { supabase } from "../../src/lib/supabase";
 
 import FloatingSOSButton from "../../src/services/FloatingSOSButton";
-import * as SecureStore from "expo-secure-store";
+
+let SecureStore = null;
+try {
+  SecureStore = require("expo-secure-store");
+} catch {}
 
 // ✅ Must match Auth + LiveTracker key
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
