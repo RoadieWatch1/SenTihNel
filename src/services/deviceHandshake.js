@@ -237,35 +237,22 @@ export async function handshakeDevice(opts = {}) {
         };
       }
 
-      // 5) ✅ Display name (per-user first, then legacy, then derived)
+      // 5) ✅ Display name
+      // Only resolve + send a name when explicitly provided (login/signup flows).
+      // Maintenance handshakes (tab switch, GPS sync) pass null so the SQL
+      // preserves whatever name is already in the devices table.
       const overrideName = String(displayNameOverride || "").trim();
-      const perUserKey = getDeviceNameKeyForUser(userBefore.id);
+      let displayName = null;
 
-      let storedPerUser = "";
-      let storedLegacy = "";
-
-      try {
-        const v = await AsyncStorage.getItem(perUserKey);
-        storedPerUser = String(v || "").trim();
-      } catch {}
-
-      try {
-        const v = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_NAME_LEGACY);
-        storedLegacy = String(v || "").trim();
-      } catch {}
-
-      let displayName =
-        overrideName || storedPerUser || storedLegacy || deriveDisplayName({ user: userBefore, deviceId });
-
-      displayName = String(displayName || "").trim();
-
-      // Persist per-user AND legacy for compatibility
-      try {
-        if (displayName) {
+      if (overrideName) {
+        // Explicit override from auth flow → use it and persist
+        displayName = overrideName;
+        const perUserKey = getDeviceNameKeyForUser(userBefore.id);
+        try {
           await AsyncStorage.setItem(perUserKey, displayName);
           await AsyncStorage.setItem(STORAGE_KEY_DEVICE_NAME_LEGACY, displayName);
-        }
-      } catch {}
+        } catch {}
+      }
 
       // 6) ✅ Preferred path: SECURITY DEFINER RPC
       const authUidBeforeRpc = userBefore.id;
@@ -465,25 +452,15 @@ export async function handshakeDevice(opts = {}) {
         if (!groupId) return { ok: false, error: "Missing groupId", deviceId };
 
         const overrideName = String(opts.displayName || "").trim();
-        const perUserKey = getDeviceNameKeyForUser(user.id);
+        let displayName = null;
 
-        let storedPerUser = "";
-        let storedLegacy = "";
-        try {
-          const v = await AsyncStorage.getItem(perUserKey);
-          storedPerUser = String(v || "").trim();
-        } catch {}
-        try {
-          const v = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_NAME_LEGACY);
-          storedLegacy = String(v || "").trim();
-        } catch {}
-
-        const displayName =
-          overrideName || storedPerUser || storedLegacy || deriveDisplayName({ user, deviceId });
-
-        if (displayName) {
-          await AsyncStorage.setItem(perUserKey, displayName);
-          await AsyncStorage.setItem(STORAGE_KEY_DEVICE_NAME_LEGACY, displayName);
+        if (overrideName) {
+          displayName = overrideName;
+          const perUserKey = getDeviceNameKeyForUser(user.id);
+          try {
+            await AsyncStorage.setItem(perUserKey, displayName);
+            await AsyncStorage.setItem(STORAGE_KEY_DEVICE_NAME_LEGACY, displayName);
+          } catch {}
         }
 
         const payload = {

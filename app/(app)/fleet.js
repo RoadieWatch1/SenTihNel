@@ -991,7 +991,14 @@ export default function FleetScreen() {
       console.log("Tab switch AsyncStorage error:", e?.message || e);
     }
 
-    // ✅ Rebind tracker caches + handshake device to new fleet + force GPS sync
+    // ✅ Move device row to the new fleet FIRST (doesn't depend on GPS)
+    try {
+      await handshakeDevice({ groupId: fleet.groupId });
+    } catch (e) {
+      console.log("Tab switch handshake error:", e?.message || e);
+    }
+
+    // ✅ Rebind tracker caches + force GPS sync (best-effort, may fail without GPS)
     try {
       await rebindTrackerToLatestFleet(`tab_switch_${tab}`);
     } catch (e) {
