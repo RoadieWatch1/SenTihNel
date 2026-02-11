@@ -41,8 +41,10 @@ import { supabase } from "../../src/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
+import * as Location from "expo-location";
+import { Camera } from "expo-camera";
 import { getDeviceId } from "../../src/services/Identity";
-import { rebindTrackerToLatestFleet } from "../../src/services/LiveTracker";
+import { startLiveTracking, rebindTrackerToLatestFleet } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import AlarmService from "../../src/services/AlarmService";
 
@@ -218,6 +220,7 @@ export default function FleetScreen() {
   const initialBootDoneRef = useRef(false); // ✅ Prevent boot from running multiple times
   const activeGroupIdRef = useRef(null); // ✅ Track active group to prevent stale subscription data
   const fetchFleetRef = useRef(null); // ✅ Stable ref for fetchFleet (avoids broadcast channel churn)
+  const permissionsRequestedRef = useRef(false); // ✅ Prevent duplicate permission requests
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -1117,6 +1120,56 @@ export default function FleetScreen() {
     await openLiveView(sos);
   };
 
+  // ✅ FIX: Request all permissions + start live tracking.
+  // Fleet is now the first screen after login, so permissions must be prompted here.
+  // home.js still has its own permission gate for the SOS button — this just ensures
+  // the initial system prompts fire on first app launch.
+  const requestPermissionsAndStartTracking = async () => {
+    if (permissionsRequestedRef.current) return;
+    permissionsRequestedRef.current = true;
+
+    try {
+      const isGranted = (s) => String(s || "").toLowerCase() === "granted";
+
+      // 1) Foreground location
+      const fg = await Location.getForegroundPermissionsAsync();
+      if (!isGranted(fg?.status)) {
+        const fgReq = await Location.requestForegroundPermissionsAsync();
+        if (!isGranted(fgReq?.status)) return;
+      }
+
+      // 2) Background location
+      const bg = await Location.getBackgroundPermissionsAsync();
+      if (!isGranted(bg?.status)) {
+        await Location.requestBackgroundPermissionsAsync();
+      }
+
+      // 3) Camera
+      const cam = await Camera.getCameraPermissionsAsync();
+      if (!isGranted(cam?.status)) {
+        await Camera.requestCameraPermissionsAsync();
+      }
+
+      // 4) Microphone
+      const mic = await Camera.getMicrophonePermissionsAsync();
+      if (!isGranted(mic?.status)) {
+        await Camera.requestMicrophonePermissionsAsync();
+      }
+
+      // 5) Start live tracking if foreground + background location granted
+      const fgFinal = await Location.getForegroundPermissionsAsync();
+      const bgFinal = await Location.getBackgroundPermissionsAsync();
+      if (isGranted(fgFinal?.status) && isGranted(bgFinal?.status)) {
+        const stableId = await AsyncStorage.getItem("sentinel_device_id");
+        if (stableId) {
+          await startLiveTracking(stableId);
+        }
+      }
+    } catch (e) {
+      console.log("Fleet permission request warning (non-fatal):", e?.message || e);
+    }
+  };
+
   const boot = useCallback(async () => {
     if (!isMountedRef.current) return;
 
@@ -1195,6 +1248,10 @@ export default function FleetScreen() {
       }
 
       await fetchFleet(gidToUse);
+
+      // ✅ FIX: Request permissions + start tracking here (fleet is now the first screen after login).
+      // Previously this only happened in home.js, so redirecting to fleet meant permissions were never asked.
+      requestPermissionsAndStartTracking();
     } catch (e) {
       console.log("boot error:", e?.message || e);
       if (isMountedRef.current) setErrorText("Could not load fleet. Pull down to retry.");
