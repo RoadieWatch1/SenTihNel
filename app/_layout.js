@@ -223,7 +223,7 @@ function AuthGate() {
         } catch {}
 
         // ✅ Logged in + has fleet -> must be in app
-        if (!inAppGroup) safeReplace("/(app)/home");
+        if (!inAppGroup) safeReplace("/(app)/fleet");
         return;
       } catch (e) {
         safeReplace("/(auth)/auth");
@@ -259,7 +259,7 @@ function AuthGate() {
 
         await maybeHandshake(session, groupId);
 
-        safeReplace("/(app)/home");
+        safeReplace("/(app)/fleet");
       }
     );
 

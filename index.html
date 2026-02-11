@@ -1144,6 +1144,7 @@
     let currentFleetId = null;
     let userFleets = [];
     let fleetMembers = [];
+    let activeDeviceSet = new Set(); // ✅ Tracks is_active=true device_ids to filter stale devices
     let activeSOSList = [];
     let selectedSOSDeviceId = null;
     let memberMarkers = {}; // deviceId -> marker instance
@@ -1221,18 +1222,31 @@
     // AGORA TOKEN
     // ═══════════════════════════════════════════════════════════════
     async function fetchAgoraToken(deviceId, role = 'subscriber', uid = 0) {
-      const { data: { session } } = await db.auth.getSession();
-      if (!session?.access_token) throw new Error('Not authenticated');
+      async function attemptFetch() {
+        const { data: { session } } = await db.auth.getSession();
+        if (!session?.access_token) throw new Error('Not authenticated');
 
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ device_id: deviceId, uid, role }),
-      });
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ device_id: deviceId, uid, role }),
+        });
+        return res;
+      }
+
+      // Attempt 1
+      let res = await attemptFetch();
+
+      // If 401 (expired token), refresh session and retry once
+      if (res.status === 401) {
+        console.warn('Agora token 401 — refreshing session and retrying...');
+        try { await db.auth.refreshSession(); } catch {}
+        res = await attemptFetch();
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1493,33 +1507,42 @@
       if (!currentFleetId) return;
 
       try {
-        // ✅ Get tracking sessions directly for this fleet (includes all active devices)
-        const { data: trackingData, error: trackingErr } = await db
-          .from('tracking_sessions')
-          .select('*')
-          .eq('group_id', currentFleetId);
+        // ✅ FIX: First get ONLY active devices for this fleet
+        // This filters out devices from users who logged out, deleted the app, or reinstalled
+        const { data: activeDevicesData, error: devErr } = await db
+          .from('devices')
+          .select('device_id, display_name, user_id')
+          .eq('group_id', currentFleetId)
+          .eq('is_active', true);
 
-        if (trackingErr) {
-          console.error('Failed to load tracking sessions:', trackingErr);
+        if (devErr) {
+          console.error('Failed to load active devices:', devErr);
         }
 
-        // ✅ Get device display names from devices table
-        const deviceIds = (trackingData || []).map(t => t.device_id).filter(Boolean);
+        const activeDeviceIds = (activeDevicesData || []).map(d => d.device_id).filter(Boolean);
+        activeDeviceSet = new Set(activeDeviceIds); // ✅ Cache for realtime filter
         let deviceNames = {};
+        (activeDevicesData || []).forEach(d => {
+          deviceNames[d.device_id] = d.display_name || 'Device';
+        });
 
-        if (deviceIds.length > 0) {
-          const { data: devices } = await db
-            .from('devices')
-            .select('device_id, display_name, user_id')
-            .in('device_id', deviceIds);
+        // ✅ Only fetch tracking sessions for active devices
+        let trackingData = [];
+        if (activeDeviceIds.length > 0) {
+          const { data, error: trackingErr } = await db
+            .from('tracking_sessions')
+            .select('*')
+            .eq('group_id', currentFleetId)
+            .in('device_id', activeDeviceIds);
 
-          (devices || []).forEach(d => {
-            deviceNames[d.device_id] = d.display_name || 'Device';
-          });
+          if (trackingErr) {
+            console.error('Failed to load tracking sessions:', trackingErr);
+          }
+          trackingData = data || [];
         }
 
-        // Build fleet members list from tracking sessions
-        fleetMembers = (trackingData || []).map(t => {
+        // Build fleet members list from tracking sessions (only active devices)
+        fleetMembers = trackingData.map(t => {
           return {
             userId: null,
             deviceId: t.device_id,
@@ -1566,6 +1589,12 @@
 
     function handleMemberUpdate(data) {
       const deviceId = data.device_id;
+
+      // ✅ FIX: Ignore updates from devices not in the active set
+      if (activeDeviceSet.size > 0 && !activeDeviceSet.has(deviceId)) {
+        return;
+      }
+
       const memberIdx = fleetMembers.findIndex(m => m.deviceId === deviceId);
 
       if (memberIdx >= 0) {
@@ -1580,7 +1609,8 @@
           gpsQuality: data.gps_quality
         };
       } else if (deviceId && data.group_id === currentFleetId) {
-        // ✅ New device joined this fleet - add to list
+        // New device joined this fleet - add to list and mark active
+        activeDeviceSet.add(deviceId);
         fleetMembers.push({
           userId: null,
           deviceId: deviceId,

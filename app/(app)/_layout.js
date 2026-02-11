@@ -19,6 +19,9 @@ function CustomDrawerContent(props) {
   const router = useRouter();
 
   const handleLogout = async () => {
+    const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
+    const groupId = await AsyncStorage.getItem("sentinel_group_id").catch(() => null);
+
     // ✅ Stop SOS + tracking BEFORE signing out
     // Prevents orphaned SOS state in DB when user logs out mid-emergency
     try {
@@ -34,13 +37,22 @@ function CustomDrawerContent(props) {
       console.log("⚠️ Pre-logout cleanup error (non-fatal):", e?.message || e);
     }
 
-    // ✅ Remove push token from server so stale notifications aren't sent
+    // ✅ Mark device INACTIVE in DB so it disappears from fleet lists
+    // Must happen BEFORE signOut (needs auth for RLS)
     try {
-      const deviceId = await AsyncStorage.getItem("sentinel_device_id");
       if (deviceId) {
-        await supabase.from("push_tokens").delete().eq("device_id", deviceId);
+        await Promise.race([
+          Promise.allSettled([
+            supabase.from("devices").update({ is_active: false }).eq("device_id", deviceId),
+            supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId),
+            supabase.from("push_tokens").delete().eq("device_id", deviceId),
+          ]),
+          new Promise((r) => setTimeout(r, 3000)), // 3s hard timeout
+        ]);
       }
-    } catch {}
+    } catch (e) {
+      console.log("⚠️ Device deactivation error (non-fatal):", e?.message || e);
+    }
 
     globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
     try { supabase.auth.stopAutoRefresh(); } catch {}
@@ -126,10 +138,12 @@ export default function AppLayout() {
           onSOSCancelled: (deviceId) => {
             if (!mounted) return;
             console.log("AppLayout: SOS cancelled", deviceId);
-            // Clear overlay if this was the displayed alert
-            setSosAlert((prev) =>
-              prev?.deviceId === deviceId ? null : prev
-            );
+            // Clear overlay if this was the displayed alert.
+            // null deviceId = clear all (stale alert cleanup)
+            setSosAlert((prev) => {
+              if (!deviceId) return null;
+              return prev?.deviceId === deviceId ? null : prev;
+            });
           },
           onSOSAcknowledged: (deviceId, byDeviceId) => {
             console.log("AppLayout: SOS acknowledged", deviceId, "by", byDeviceId);

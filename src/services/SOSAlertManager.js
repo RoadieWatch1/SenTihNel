@@ -25,6 +25,10 @@ const MY_DEVICE_ID_KEY = "sentinel_device_id";
 const MAX_CHANNEL_RETRIES = 5;
 const INITIAL_RETRY_DELAY_MS = 2000;
 
+// ✅ FIX: Periodic DB poll interval when SOS alerts are active
+// Catches missed cancel broadcasts (e.g., WebSocket momentarily disconnected)
+const RESOLVED_POLL_INTERVAL_MS = 15_000; // Check every 15 seconds
+
 // ============================================
 // STATE
 // ============================================
@@ -38,6 +42,7 @@ let channelRetryTimer = null;
 let channelRetryCount = 0;
 let appStateSubscription = null;
 let notificationSubscriptions = [];
+let resolvedPollTimer = null; // ✅ Periodic DB poll for missed cancel broadcasts
 
 // Callbacks for UI updates
 let onSOSReceived = null; // (sosData) => void
@@ -109,6 +114,9 @@ async function cleanup() {
     channelRetryTimer = null;
   }
   channelRetryCount = 0;
+
+  // ✅ Clear resolved-alert polling timer
+  stopResolvedPoll();
 
   // Remove realtime channels
   if (realtimeChannel) {
@@ -307,20 +315,23 @@ async function handleSOSBroadcast(sosData) {
   // Get app state
   const appState = AppState.currentState;
 
-  if (appState === "active") {
-    // App is in foreground - show overlay + alarm
-    console.log("SOSAlertManager: App active - starting alarm");
-    await AlarmService.startAlarm();
-  } else {
-    // App is in background - show notification + vibrate
+  // ✅ FIX: Always start alarm (sound + vibration) regardless of app state.
+  // AlarmService uses staysActiveInBackground: true, so it can play in background.
+  // Previously only foreground got the alarm — background users got silent vibration only.
+  console.log("SOSAlertManager: Starting alarm (appState:", appState, ")");
+  await AlarmService.startAlarm();
+
+  if (appState !== "active") {
+    // App is in background - also show push notification as fallback
     console.log("SOSAlertManager: App backgrounded - showing notification");
     await NotificationService.showSOSNotification(
       display_name || `Device ${device_id?.slice(0, 8)}`,
       sosData
     );
-    // Also start vibration (will work on some devices even in background)
-    AlarmService.startVibration();
   }
+
+  // ✅ FIX: Start polling DB for resolved alerts (catches missed cancel broadcasts)
+  startResolvedPoll();
 
   // Notify UI callback
   if (onSOSReceived) {
@@ -364,9 +375,10 @@ async function handleSOSCancelBroadcast(data) {
   activeSOSAlerts.delete(device_id);
   await saveActiveAlerts();
 
-  // Stop alarm if no more active alerts
+  // Stop alarm + polling if no more active alerts
   if (activeSOSAlerts.size === 0) {
     await AlarmService.stopAlarm();
+    stopResolvedPoll();
   }
 
   // Show cancel notification
@@ -569,6 +581,14 @@ async function checkForActiveSOSAlerts(groupId) {
         activeSOSAlerts.clear();
         await saveActiveAlerts();
         await AlarmService.stopAlarm();
+        stopResolvedPoll();
+
+        // ✅ FIX: Also clear the UI overlay for stale alerts
+        if (onSOSCancelled) {
+          // Notify for each stale device — in practice there's usually just one
+          // The UI will see null and remove the overlay
+          onSOSCancelled(null);
+        }
       }
     }
   } catch (e) {
@@ -616,6 +636,40 @@ async function checkForResolvedAlerts(groupId) {
 }
 
 // ============================================
+// RESOLVED-ALERT POLLING
+// ============================================
+
+/**
+ * ✅ FIX: Start periodic DB polling to catch missed SOS cancel broadcasts.
+ * When a cancel broadcast is missed (WebSocket momentary disconnect), the overlay
+ * stays forever. This poll checks the DB every 15s while alerts are active.
+ */
+function startResolvedPoll() {
+  if (resolvedPollTimer) return; // Already running
+  if (!currentGroupId) return;
+
+  console.log("SOSAlertManager: Starting resolved-alert polling");
+  resolvedPollTimer = setInterval(async () => {
+    if (activeSOSAlerts.size === 0) {
+      stopResolvedPoll();
+      return;
+    }
+    await checkForResolvedAlerts(currentGroupId);
+  }, RESOLVED_POLL_INTERVAL_MS);
+}
+
+/**
+ * Stop the resolved-alert polling timer
+ */
+function stopResolvedPoll() {
+  if (resolvedPollTimer) {
+    clearInterval(resolvedPollTimer);
+    resolvedPollTimer = null;
+    console.log("SOSAlertManager: Stopped resolved-alert polling");
+  }
+}
+
+// ============================================
 // PUBLIC API
 // ============================================
 
@@ -630,9 +684,10 @@ async function acknowledgeAlert(deviceId) {
   activeSOSAlerts.delete(deviceId);
   await saveActiveAlerts();
 
-  // Stop alarm if no more active alerts
+  // Stop alarm + polling if no more active alerts
   if (activeSOSAlerts.size === 0) {
     await AlarmService.stopAlarm();
+    stopResolvedPoll();
   }
 
   // Broadcast acknowledgment to fleet
@@ -657,6 +712,7 @@ async function dismissAllAlerts() {
   activeSOSAlerts.clear();
   await saveActiveAlerts();
   await AlarmService.stopAlarm();
+  stopResolvedPoll();
 }
 
 /**

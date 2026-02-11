@@ -797,7 +797,7 @@ export default function AuthPage() {
           showCopy: !!owned.inviteCode,
           showShare: !!owned.inviteCode,
           primaryText: "CONTINUE",
-          onPrimary: () => router.replace("/(app)/home"),
+          onPrimary: () => router.replace("/(app)/fleet"),
         });
         return;
       }
@@ -846,7 +846,7 @@ export default function AuthPage() {
         showCopy: true,
         showShare: true,
         primaryText: "CONTINUE",
-        onPrimary: () => router.replace("/(app)/home"),
+        onPrimary: () => router.replace("/(app)/fleet"),
       });
     } catch (err) {
       const msg = String(err?.message || "");
@@ -1085,9 +1085,9 @@ export default function AuthPage() {
         openModal({
           variant: "success",
           title: "Joined Fleet",
-          message: "You’re now linked and visible to the fleet manager.",
+          message: "You're now linked and visible to the fleet manager.",
           primaryText: "CONTINUE",
-          onPrimary: () => router.replace("/(app)/home"),
+          onPrimary: () => router.replace("/(app)/fleet"),
         });
         return;
       }
@@ -1135,7 +1135,7 @@ export default function AuthPage() {
               title: "Fleet Linked",
               message: `Your account is now linked to the fleet as your ${pendingFleetType} fleet.`,
               primaryText: "CONTINUE",
-              onPrimary: () => router.replace("/(app)/home"),
+              onPrimary: () => router.replace("/(app)/fleet"),
             });
             return;
           }
@@ -1160,7 +1160,7 @@ export default function AuthPage() {
         await handshakeDevice({ groupId: existingGroupId, displayName: dn });
         await kickTrackerRebind("resume");
 
-        router.replace("/(app)/home");
+        router.replace("/(app)/fleet");
         return;
       }
 

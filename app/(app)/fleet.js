@@ -842,6 +842,7 @@ export default function FleetScreen() {
         .from("devices")
         .select("device_id, display_name")
         .eq("group_id", gid)
+        .eq("is_active", true)
         .in("device_id", deviceIds);
 
       if (error) {
@@ -920,9 +921,31 @@ export default function FleetScreen() {
         const rows = Array.isArray(data) ? data : [];
         const deduped = dedupeLatestByDevice(rows);
 
-        if (isMountedRef.current) setWorkers(deduped);
+        // ✅ FIX: Filter out inactive devices (deleted app, logged out, or reinstalled)
+        let filtered = deduped;
+        try {
+          const dIds = deduped.map((r) => r?.device_id).filter(Boolean);
+          if (dIds.length > 0) {
+            const { data: activeDevices } = await supabase
+              .from("devices")
+              .select("device_id")
+              .eq("group_id", gid)
+              .eq("is_active", true)
+              .in("device_id", dIds);
 
-        await hydrateNamesForSessions({ gid, sessions: deduped });
+            if (activeDevices && activeDevices.length > 0) {
+              const activeSet = new Set(activeDevices.map((d) => d.device_id));
+              filtered = deduped.filter((r) => activeSet.has(r.device_id));
+            }
+          }
+        } catch (e) {
+          console.log("is_active filter warning (non-fatal):", e?.message || e);
+          filtered = deduped;
+        }
+
+        if (isMountedRef.current) setWorkers(filtered);
+
+        await hydrateNamesForSessions({ gid, sessions: filtered });
       } catch (err) {
         const msg = err?.message || "Failed to load fleet.";
 
