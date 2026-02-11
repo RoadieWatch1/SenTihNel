@@ -924,19 +924,21 @@ export default function FleetScreen() {
         const rows = Array.isArray(data) ? data : [];
         const deduped = dedupeLatestByDevice(rows);
 
-        // ✅ FIX: Filter out inactive devices (deleted app, logged out, or reinstalled)
+        // ✅ FIX: Filter out inactive devices (deleted app, logged out, switched fleet, or reinstalled)
         let filtered = deduped;
         try {
           const dIds = deduped.map((r) => r?.device_id).filter(Boolean);
           if (dIds.length > 0) {
-            const { data: activeDevices } = await supabase
+            const { data: activeDevices, error: activeErr } = await supabase
               .from("devices")
               .select("device_id")
               .eq("group_id", gid)
               .eq("is_active", true)
               .in("device_id", dIds);
 
-            if (activeDevices && activeDevices.length > 0) {
+            // Always apply filter when query succeeded (even if 0 active devices)
+            // Only skip filter on query error (fallback to showing all)
+            if (!activeErr && activeDevices) {
               const activeSet = new Set(activeDevices.map((d) => d.device_id));
               filtered = deduped.filter((r) => activeSet.has(r.device_id));
             }
