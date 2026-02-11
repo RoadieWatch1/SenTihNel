@@ -558,6 +558,8 @@
         border-top: 2px solid rgba(0,243,255,0.75);
         border-left: none;
         z-index: 500;
+        overscroll-behavior: contain; /* Keep scroll inside from pulling the page */
+        -webkit-overflow-scrolling: touch; /* Smoother iOS scrolling when open */
       }
       .sidebar.open { transform: translateY(0); }
 
@@ -569,6 +571,7 @@
         align-items: center;
         background: rgba(5, 10, 20, 0.98);
         cursor: pointer;
+        touch-action: none; /* Prevent browser from interpreting drag as scroll */
       }
       .handle-bar { width: 40px; height: 4px; background: rgba(0,243,255,0.85); border-radius: 2px; }
       .handle-text { font-size: 10px; color: rgba(0,243,255,0.85); letter-spacing: 2px; margin-top: 8px; text-transform: uppercase; font-family: 'Share Tech Mono', monospace; }
@@ -2831,6 +2834,157 @@
       document.getElementById('sidebar').classList.toggle('open');
       setTimeout(() => { try { map && map.resize(); } catch(e) {} }, 250);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // DRAGGABLE BOTTOM SHEET (Mobile)
+    // ═══════════════════════════════════════════════════════════════
+    (function enableBottomSheetDrag() {
+      const sidebar = document.getElementById("sidebar");
+      const handle = sidebar?.querySelector(".sheet-handle");
+      if (!sidebar || !handle) return;
+
+      const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
+
+      let dragging = false;
+      let startY = 0;
+      let startTranslate = 0;
+      let currentTranslate = 0;
+      let maxTranslate = 0; // how far down (closed) we can go
+      let lastY = 0;
+      let lastT = 0;
+      let lastTime = 0;
+      let velocity = 0;
+
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+      function computeMaxTranslate() {
+        // closed position: translateY(calc(100% - 60px))
+        // we'll approximate in px using the sidebar height and handle height
+        const rect = sidebar.getBoundingClientRect();
+        const handleRect = handle.getBoundingClientRect();
+        // amount of sidebar that should remain visible when "closed"
+        const peek = handleRect.height || 60;
+        maxTranslate = Math.max(0, rect.height - peek);
+      }
+
+      function setTranslate(px) {
+        currentTranslate = clamp(px, 0, maxTranslate);
+        sidebar.style.transition = "none";
+        sidebar.style.transform = `translateY(${currentTranslate}px)`;
+      }
+
+      function setOpen(open) {
+        sidebar.style.transition = "transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)";
+        sidebar.classList.toggle("open", open);
+
+        // Keep your original class-based behavior, but we also hard-set transform
+        if (open) {
+          sidebar.style.transform = "translateY(0px)";
+          currentTranslate = 0;
+        } else {
+          computeMaxTranslate();
+          sidebar.style.transform = `translateY(${maxTranslate}px)`;
+          currentTranslate = maxTranslate;
+        }
+
+        // restore transition after snap
+        window.setTimeout(() => {
+          sidebar.style.transition = "";
+        }, 350);
+      }
+
+      // Keep your tap behavior
+      const originalToggle = window.toggleSheet;
+      window.toggleSheet = function () {
+        if (!isMobile()) return originalToggle?.();
+        const willOpen = !sidebar.classList.contains("open");
+        setOpen(willOpen);
+        setTimeout(() => { try { map && map.resize(); } catch (e) {} }, 250);
+      };
+
+      function onDown(e) {
+        if (!isMobile()) return;
+
+        dragging = true;
+        computeMaxTranslate();
+
+        // If we're currently "open" via class, start from 0
+        // If closed, start from maxTranslate
+        startTranslate = sidebar.classList.contains("open") ? 0 : maxTranslate;
+        currentTranslate = startTranslate;
+
+        startY = e.clientY;
+        lastY = startY;
+        lastT = startTranslate;
+        lastTime = performance.now();
+        velocity = 0;
+
+        sidebar.setPointerCapture?.(e.pointerId);
+      }
+
+      function onMove(e) {
+        if (!dragging || !isMobile()) return;
+
+        // prevent page scroll while dragging
+        e.preventDefault();
+
+        const dy = e.clientY - startY;
+        const next = startTranslate + dy;
+
+        const now = performance.now();
+        const dt = Math.max(1, now - lastTime);
+        const dY = e.clientY - lastY;
+
+        velocity = dY / dt; // px per ms (sign matters)
+        lastY = e.clientY;
+        lastTime = now;
+
+        setTranslate(next);
+      }
+
+      function onUp() {
+        if (!dragging || !isMobile()) return;
+        dragging = false;
+
+        // snap decision:
+        // - if flick up (negative velocity), open
+        // - if flick down (positive velocity), close
+        // - otherwise snap by midpoint
+        const flick = velocity;
+        const midpoint = maxTranslate * 0.5;
+
+        if (flick < -0.3) return setOpen(true);
+        if (flick > 0.3) return setOpen(false);
+
+        const shouldOpen = currentTranslate < midpoint;
+        setOpen(shouldOpen);
+      }
+
+      // Pointer events cover modern mobile browsers well
+      handle.addEventListener("pointerdown", onDown, { passive: false });
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp, { passive: true });
+      window.addEventListener("pointercancel", onUp, { passive: true });
+
+      // Recompute on resize/orientation changes
+      window.addEventListener("resize", () => {
+        if (!isMobile()) {
+          // reset inline transform if leaving mobile
+          sidebar.style.transform = "";
+          sidebar.style.transition = "";
+          return;
+        }
+        // keep state consistent
+        computeMaxTranslate();
+        setOpen(sidebar.classList.contains("open"));
+      });
+
+      // initialize closed translate for mobile (so it matches the class-based CSS)
+      if (isMobile() && !sidebar.classList.contains("open")) {
+        computeMaxTranslate();
+        sidebar.style.transform = `translateY(${maxTranslate}px)`;
+      }
+    })();
 
     function toggleAudio() {
       audioUnmuted = !audioUnmuted;

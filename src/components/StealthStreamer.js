@@ -22,9 +22,35 @@ function stableUidFromDeviceId(deviceId) {
 }
 
 async function fetchAgoraToken(channelId, role = "publisher", uid = 0) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const jwt = session?.access_token;
-  if (!jwt) throw new Error("No auth session for Agora token");
+  // ✅ Refresh session first to ensure JWT is valid (especially after background/foreground)
+  const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
+  const jwt = refreshedSession?.access_token;
+
+  if (refreshError || !jwt) {
+    // Fallback to existing session if refresh fails (network issues, etc.)
+    const { data: { session: fallbackSession } } = await supabase.auth.getSession();
+    const fallbackJwt = fallbackSession?.access_token;
+    if (!fallbackJwt) throw new Error("No auth session for Agora token");
+    console.log("⚠️ Session refresh failed, using existing session:", refreshError?.message);
+
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${fallbackJwt}`,
+      },
+      body: JSON.stringify({ device_id: channelId, uid, role }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  console.log("✅ Session refreshed for Agora token fetch");
 
   const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
     method: "POST",
@@ -38,6 +64,7 @@ async function fetchAgoraToken(channelId, role = "publisher", uid = 0) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    console.error("❌ Agora token fetch error:", { status: res.status, error: err.error || err, channel: channelId, role, uid });
     throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
   }
   return await res.json();
