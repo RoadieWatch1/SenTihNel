@@ -20,46 +20,29 @@ function CustomDrawerContent(props) {
 
   const handleLogout = async () => {
     const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
-    const groupId = await AsyncStorage.getItem("sentinel_group_id").catch(() => null);
 
-    // ✅ Stop SOS + tracking BEFORE signing out
-    // Prevents orphaned SOS state in DB when user logs out mid-emergency
+    // ✅ All cleanup + DB deactivation runs in PARALLEL with a single 2s hard cap.
+    // Previously this was sequential (5s + 3s = 8s worst case) — users saw "loading timed out".
     try {
       await Promise.race([
-        (async () => {
-          await clearSOS();           // Clear SOS flag in AsyncStorage
-          await stopLiveTracking();   // Stop GPS + mark OFFLINE in DB
-          await cancelBatSignal();    // Broadcast cancel + cleanup
-        })(),
-        new Promise((r) => setTimeout(r, 5000)), // Hard 5s timeout — never block logout
+        Promise.allSettled([
+          clearSOS().catch(() => {}),
+          stopLiveTracking().catch(() => {}),
+          cancelBatSignal().catch(() => {}),
+          ...(deviceId ? [
+            supabase.from("devices").update({ is_active: false }).eq("device_id", deviceId).then(() => {}),
+            supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId).then(() => {}),
+            supabase.from("push_tokens").delete().eq("device_id", deviceId).then(() => {}),
+          ] : []),
+        ]),
+        new Promise((r) => setTimeout(r, 2000)), // 2s hard cap — then sign out regardless
       ]);
-    } catch (e) {
-      console.log("⚠️ Pre-logout cleanup error (non-fatal):", e?.message || e);
-    }
+    } catch {}
 
-    // ✅ Mark device INACTIVE in DB so it disappears from fleet lists
-    // Must happen BEFORE signOut (needs auth for RLS)
-    try {
-      if (deviceId) {
-        await Promise.race([
-          Promise.allSettled([
-            supabase.from("devices").update({ is_active: false }).eq("device_id", deviceId),
-            supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId),
-            supabase.from("push_tokens").delete().eq("device_id", deviceId),
-          ]),
-          new Promise((r) => setTimeout(r, 3000)), // 3s hard timeout
-        ]);
-      }
-    } catch (e) {
-      console.log("⚠️ Device deactivation error (non-fatal):", e?.message || e);
-    }
-
+    // ✅ Sign out + redirect immediately (never blocked by cleanup above)
     globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
     try { supabase.auth.stopAutoRefresh(); } catch {}
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
-
-    // ✅ Explicit redirect — don't rely solely on AuthGate event listener
-    // (onAuthStateChange can silently fail in production/EAS builds)
     try { router.replace("/(auth)/auth"); } catch {}
   };
 
