@@ -88,7 +88,7 @@ let bindCache = {
   checkedAt: 0,
 };
 const BIND_CACHE_MS_OK = 60_000;
-const BIND_CACHE_MS_FAIL = 10_000;
+const BIND_CACHE_MS_FAIL = 3_000;
 
 // ✅ Claim cache (prevents repeated claim spam)
 let claimCache = {
@@ -321,18 +321,19 @@ export const forceOneShotSync = async (opts = {}) => {
 // It clears stale caches AND forces an immediate sync attempt on the new group.
 export const rebindTrackerToLatestFleet = async (reason = "manual_rebind") => {
   try {
+    // Always clear stale caches first — even if we can't read the new group yet,
+    // we must not keep uploading to the OLD fleet.
+    resetFleetBoundState(reason);
+
     const nextGroupId = await safeGetGroupId();
     if (!nextGroupId) {
-      console.log("🟡 TRACKER REBIND: No group_id found yet — skipping.");
+      console.log("🟡 TRACKER REBIND: No group_id found yet — caches cleared, skipping sync.");
       return;
     }
 
     // Update memoryGroupId immediately so processUpload treats this as the active fleet
     const prev = memoryGroupId;
     memoryGroupId = nextGroupId;
-
-    // Hard reset caches so membership/bind/claim re-run under the new group
-    resetFleetBoundState(`${reason}${prev && prev !== nextGroupId ? ` (${prev} → ${nextGroupId})` : ""}`);
 
     // Try an immediate sync (best-effort)
     await forceOneShotSync();
@@ -615,11 +616,10 @@ const processUpload = async (location, { isPoorGps, statusOverride = null }) => 
   // ✅ Option B: ensure device is bound/moved to this user+group before we touch tracking_sessions
   const boundOk = await ensureDeviceBoundToUserAndGroup(user.id, deviceId, groupId);
   if (!boundOk) {
-    console.log("🟡 TRACKER: Device not bound to user+group yet — skipping upload (prevents RLS spam).");
-    return;
+    console.log("🟡 TRACKER: Device not bound to user+group yet — will still attempt claim + upload.");
   }
 
-  // ✅ Best-effort claim on the current group
+  // ✅ Best-effort claim on the current group (run even if bind failed — claim may succeed independently)
   await claimTrackingDeviceIfNeeded(deviceId, groupId);
 
   const batteryPercent = await safeGetBatteryPercent();

@@ -990,6 +990,10 @@ export default function FleetScreen() {
       return;
     }
 
+    // Remember previous state so we can revert on handshake failure
+    const prevTab = activeTab;
+    const prevGroupId = activeGroupIdRef.current;
+
     // ✅ Set active group ref FIRST to prevent stale subscription callbacks
     activeGroupIdRef.current = fleet.groupId;
 
@@ -1019,11 +1023,40 @@ export default function FleetScreen() {
       console.log("Tab switch AsyncStorage error:", e?.message || e);
     }
 
-    // ✅ Move device row to the new fleet FIRST (doesn't depend on GPS)
+    // ✅ Bug 1 fix: Pass saved display name so it doesn't revert to 'Device'
+    // ✅ Bug 2 fix: If handshake fails, revert to previous fleet
+    let hsResult = null;
     try {
-      await handshakeDevice({ groupId: fleet.groupId });
+      let savedName = null;
+      try {
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        const uid = currentUser?.id;
+        if (uid) {
+          savedName = await AsyncStorage.getItem(`sentinel_device_display_name:${uid}`);
+        }
+      } catch {}
+      hsResult = await handshakeDevice({ groupId: fleet.groupId, displayName: savedName || undefined });
     } catch (e) {
       console.log("Tab switch handshake error:", e?.message || e);
+      hsResult = { ok: false, error: e?.message || String(e) };
+    }
+
+    if (!hsResult?.ok) {
+      console.log("🚨 Tab switch handshake failed, reverting to previous fleet:", hsResult?.error);
+      // Revert UI + storage to previous fleet
+      activeGroupIdRef.current = prevGroupId;
+      if (isMountedRef.current) {
+        setActiveTab(prevTab);
+        setSwitchFleetType(prevTab);
+        if (prevGroupId) setGroupId(prevGroupId);
+      }
+      try {
+        if (prevGroupId) await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, prevGroupId);
+      } catch {}
+      Alert.alert("Fleet Switch Failed", hsResult?.error || "Could not switch fleet. Please try again.");
+      // Still fetch previous fleet to restore UI
+      if (prevGroupId) await fetchFleet(prevGroupId);
+      return;
     }
 
     // ✅ Rebind tracker caches + force GPS sync (best-effort, may fail without GPS)
@@ -1231,6 +1264,11 @@ export default function FleetScreen() {
         const cachedGid = await loadFleetContext();
         gidToUse = cachedGid;
         if (gidToUse) activeGroupIdRef.current = gidToUse;
+      }
+
+      // ✅ Bug 6 fix: Persist resolved groupId so deviceHandshake.js can read it on restart
+      if (gidToUse) {
+        try { await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse); } catch {}
       }
 
       // Set invite code from cache, or fetch if missing
