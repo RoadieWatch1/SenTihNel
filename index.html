@@ -1610,9 +1610,11 @@
         )
         .subscribe();
 
-      // ✅ FIX: Subscribe to SOS broadcast channel (real-time alerts, not just DB changes)
-      sosBroadcastChannel = db.channel(`sos:${currentFleetId}`)
-        .on('broadcast', { event: 'sos_alert' }, (payload) => {
+      // ✅ FIX: Subscribe to SOS broadcast channel — MUST match BatSignal's channel name
+      // BatSignal sends on `fleet:${groupId}` with events: "sos", "sos_cancel"
+      // SOSAlertManager listens on `fleet:${groupId}` with events: "sos", "sos_cancel", "sos_acknowledge"
+      sosBroadcastChannel = db.channel(`fleet:${currentFleetId}`)
+        .on('broadcast', { event: 'sos' }, (payload) => {
           const data = payload?.payload;
           if (!data) return;
           console.log('[SOS BROADCAST] Alert received:', data.device_id);

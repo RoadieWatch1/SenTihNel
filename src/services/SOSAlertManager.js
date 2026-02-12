@@ -374,6 +374,7 @@ async function handleSOSStatusChange(row) {
     latitude: row.latitude,
     longitude: row.longitude,
     timestamp: row.last_updated,
+    group_id: row.group_id || null,
   });
 }
 
@@ -573,7 +574,7 @@ async function checkForActiveSOSAlerts(groupId) {
     }
 
     if (data && data.length > 0) {
-      console.log("SOSAlertManager: Found", data.length, "active SOS alerts");
+      console.log("SOSAlertManager: Found", data.length, "active SOS alerts in group", groupId?.slice(0, 8));
 
       for (const row of data) {
         // Don't alert for our own SOS
@@ -587,22 +588,32 @@ async function checkForActiveSOSAlerts(groupId) {
             latitude: row.latitude,
             longitude: row.longitude,
             timestamp: row.last_updated,
+            group_id: groupId,
           });
         }
       }
     } else {
-      // ✅ No active SOS in DB — if we have local alerts, they're stale
-      if (activeSOSAlerts.size > 0) {
-        console.log("SOSAlertManager: No SOS in DB but", activeSOSAlerts.size, "local alerts — clearing stale alerts");
-        activeSOSAlerts.clear();
+      // ✅ FIX (Bug 3): Only clear alerts that belong to THIS group, not all groups.
+      // Previously, checking a "quiet" fleet cleared alerts from the "active" fleet.
+      let removedAny = false;
+      for (const [deviceId, alertData] of activeSOSAlerts) {
+        if (alertData.group_id === groupId) {
+          console.log("SOSAlertManager: Clearing stale alert for", deviceId, "in group", groupId?.slice(0, 8));
+          activeSOSAlerts.delete(deviceId);
+          removedAny = true;
+          if (onSOSCancelled) onSOSCancelled(deviceId);
+        }
+      }
+
+      if (removedAny) {
         await saveActiveAlerts();
+      }
+
+      // Stop alarm + polling only if NO alerts remain across ANY group
+      if (activeSOSAlerts.size === 0) {
         await AlarmService.stopAlarm();
         stopResolvedPoll();
-
-        // ✅ FIX: Also clear the UI overlay for stale alerts
-        if (onSOSCancelled) {
-          // Notify for each stale device — in practice there's usually just one
-          // The UI will see null and remove the overlay
+        if (!removedAny && onSOSCancelled) {
           onSOSCancelled(null);
         }
       }
@@ -620,8 +631,15 @@ async function checkForResolvedAlerts(groupId) {
   try {
     if (activeSOSAlerts.size === 0) return;
 
-    // Query current SOS statuses for all devices we think are in SOS
-    const activeDeviceIds = Array.from(activeSOSAlerts.keys());
+    // ✅ FIX (Bug 4): Only check devices whose alert belongs to THIS group.
+    // Previously, all active device IDs were checked against one group's DB,
+    // causing cross-group alerts to be falsely cancelled.
+    const activeDeviceIds = Array.from(activeSOSAlerts.entries())
+      .filter(([, data]) => data.group_id === groupId)
+      .map(([deviceId]) => deviceId);
+
+    if (activeDeviceIds.length === 0) return;
+
     const { data, error } = await supabase
       .from('tracking_sessions_with_name')
       .select("device_id, status, display_name")

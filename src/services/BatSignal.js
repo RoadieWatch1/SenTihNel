@@ -890,6 +890,14 @@ export const sendBatSignal = async (arg) => {
     (async () => {
       for (let retry = 1; retry <= 3; retry++) {
         await sleep(5000);
+        // ✅ FIX (Bug 7): Abort retries if SOS was already cancelled
+        try {
+          const sosFlag = await AsyncStorage.getItem("sentinel_sos_active");
+          if (sosFlag !== "1") {
+            console.log("⚠️ SOS broadcast retry aborted — SOS was cancelled");
+            return;
+          }
+        } catch {}
         for (const gid of targets) {
           try {
             const ok = await tryBroadcastSOS({ groupId: gid, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng });
@@ -902,8 +910,11 @@ export const sendBatSignal = async (arg) => {
     })();
   }
 
-  // ✅ Trigger push notifications for ALL fleets (background/offline users)
+  // ✅ FIX (Bug 2): Trigger push notifications only for NON-CURRENT fleets.
+  // The current fleet gets push via DB trigger on tracking_sessions (notify_fleet_sos),
+  // so sending here too would cause double notifications.
   for (const gid of targets) {
+    if (gid === currentGroupId) continue; // DB trigger handles current group
     triggerPushNotifications({ deviceId, groupId: gid, displayName, lat: fastLat, lng: fastLng });
   }
 

@@ -180,20 +180,34 @@ export default function AppLayout() {
   }, []);
 
   // Handle SOS alert actions
+  // ✅ FIX (Bug 6): After acknowledging one alert, show the next active alert if any
   const handleAcknowledge = useCallback(async () => {
     if (sosAlert?.deviceId) {
       await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
     }
-    setSosAlert(null);
+    // Check for remaining active alerts
+    const remaining = SOSAlertManager.getActiveAlerts();
+    if (remaining.length > 0) {
+      const next = remaining[0];
+      setSosAlert({
+        deviceId: next.device_id,
+        displayName: next.display_name,
+        latitude: next.latitude,
+        longitude: next.longitude,
+      });
+    } else {
+      setSosAlert(null);
+    }
   }, [sosAlert]);
 
-  const handleViewLocation = useCallback(() => {
-    // Stop alarm but keep tracking
-    AlarmService.stopAlarm();
-    // Navigate to fleet screen to see location
+  // ✅ FIX (Bug 5): Acknowledge alert before navigating (prevents alarm restart on resume)
+  const handleViewLocation = useCallback(async () => {
+    if (sosAlert?.deviceId) {
+      await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
+    }
     router.push("/fleet");
     setSosAlert(null);
-  }, [router]);
+  }, [router, sosAlert]);
 
   const handleDismiss = useCallback(async () => {
     await SOSAlertManager.dismissAllAlerts();
