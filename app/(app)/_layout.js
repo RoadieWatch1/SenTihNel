@@ -12,6 +12,9 @@ import {
 import SOSAlertOverlay from "../../src/components/SOSAlertOverlay";
 import SOSAlertManager from "../../src/services/SOSAlertManager";
 import AlarmService from "../../src/services/AlarmService";
+
+let SecureStore = null;
+try { SecureStore = require("expo-secure-store"); } catch {}
 import { cancelBatSignal } from "../../src/services/BatSignal";
 import { clearSOS, stopLiveTracking } from "../../src/services/LiveTracker";
 
@@ -34,6 +37,9 @@ function CustomDrawerContent(props) {
             supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId).then(() => {}),
             supabase.from("push_tokens").delete().eq("device_id", deviceId).then(() => {}),
           ] : []),
+          // Clear PIN hash on logout (prevents cross-account PIN reuse)
+          AsyncStorage.removeItem("sentinel_pin_hash").catch(() => {}),
+          (async () => { try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {} })(),
         ]),
         new Promise((r) => setTimeout(r, 2000)), // 2s hard cap — then sign out regardless
       ]);

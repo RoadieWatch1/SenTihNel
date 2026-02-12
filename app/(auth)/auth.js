@@ -23,6 +23,9 @@ import { supabase } from "../../src/lib/supabase";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
 
+let SecureStore = null;
+try { SecureStore = require("expo-secure-store"); } catch {}
+
 // ===============================
 // Storage Keys
 // ===============================
@@ -253,7 +256,9 @@ async function ensureFreshSessionForEmail(targetEmail) {
         STORAGE_KEY_PENDING_INVITE,
         STORAGE_KEY_POST_LOGIN_ACTION,
         STORAGE_KEY_LAST_USER_ID,
+        "sentinel_pin_hash",
       ]);
+      try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {}
       // don't clear displayName here — user may be pre-typing it
     }
   } catch {}
@@ -269,14 +274,16 @@ async function enforceUserIsolation(userId) {
     const last = await AsyncStorage.getItem(STORAGE_KEY_LAST_USER_ID);
 
     if (last && last !== userId) {
-      console.log("🔄 USER SWITCH — clearing fleet keys", { last, userId });
+      console.log("🔄 USER SWITCH — clearing fleet keys + PIN", { last, userId });
 
       await AsyncStorage.multiRemove([
         STORAGE_KEY_GROUP_ID,
         STORAGE_KEY_INVITE_CODE,
         STORAGE_KEY_PENDING_INVITE,
         STORAGE_KEY_POST_LOGIN_ACTION,
+        "sentinel_pin_hash",
       ]);
+      try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {}
     }
 
     await AsyncStorage.setItem(STORAGE_KEY_LAST_USER_ID, String(userId));
@@ -662,10 +669,12 @@ export default function AuthPage() {
         STORAGE_KEY_PENDING_INVITE,
         STORAGE_KEY_POST_LOGIN_ACTION,
         STORAGE_KEY_LAST_USER_ID,
+        "sentinel_pin_hash",
         ...(uid ? [getDeviceNameKeyForUser(uid)] : []),
         // keep legacy name unless you want a total wipe:
         // STORAGE_KEY_DEVICE_NAME_LEGACY,
       ]);
+      try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {}
     } catch {}
     setLoading(false);
     router.replace("/(auth)/auth");
@@ -1021,6 +1030,11 @@ export default function AuthPage() {
       }
 
       await enforceUserIsolation(matched.id);
+
+      // Clear local PIN hash so home.js re-syncs the correct one from cloud
+      // (handles: reinstall, PIN changed on another device, user switch)
+      try { await AsyncStorage.removeItem("sentinel_pin_hash"); } catch {}
+      try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {}
 
       // ✅ Load per-user display name if UI is empty
       const storedName = await loadDisplayNameForUser(matched.id);
