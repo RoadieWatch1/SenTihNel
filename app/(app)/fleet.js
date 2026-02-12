@@ -35,6 +35,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  Share,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
@@ -43,6 +44,7 @@ import { useRouter } from "expo-router";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import * as Location from "expo-location";
 import { Camera } from "expo-camera";
+import * as Clipboard from "expo-clipboard";
 import { getDeviceId } from "../../src/services/Identity";
 import { startLiveTracking, rebindTrackerToLatestFleet } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
@@ -762,10 +764,23 @@ export default function FleetScreen() {
     }
   };
 
+  const copyInviteCode = async () => {
+    try {
+      if (!inviteCode) return;
+      await Clipboard.setStringAsync(inviteCode);
+      Alert.alert("Copied", "Invite code copied to clipboard.");
+    } catch (e) {
+      console.log("copyInviteCode error:", e?.message || e);
+      Alert.alert("Invite Code", inviteCode);
+    }
+  };
+
   const shareInviteCode = async () => {
     try {
       if (!inviteCode) return;
-      Alert.alert("Invite Code", `${inviteCode}\n\n(Press and hold to copy if supported)`);
+      await Share.share({
+        message: `SenTihNel Invite Code: ${inviteCode}\n\nOpen the app → Login → Join Fleet → enter this code.`,
+      });
     } catch (e) {
       console.log("shareInviteCode error:", e?.message || e);
     }
@@ -2357,6 +2372,13 @@ export default function FleetScreen() {
 
                     <TouchableOpacity
                       style={[styles.copyBtn, !inviteCode && styles.copyBtnDisabled]}
+                      onPress={copyInviteCode}
+                      disabled={!inviteCode}
+                    >
+                      <Ionicons name="copy-outline" size={16} color="#0b1220" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.copyBtn, !inviteCode && styles.copyBtnDisabled, { marginLeft: 6 }]}
                       onPress={shareInviteCode}
                       disabled={!inviteCode}
                     >

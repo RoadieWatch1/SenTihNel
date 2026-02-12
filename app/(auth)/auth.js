@@ -18,6 +18,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import { supabase } from "../../src/lib/supabase";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
@@ -104,16 +105,7 @@ const isRpcMissingError = (msgRaw) => {
   );
 };
 
-// ✅ Avoid bundling crashes: only try to load expo-clipboard at runtime if it exists
-function getOptionalClipboardModule() {
-  try {
-    // eslint-disable-next-line no-eval
-    const req = eval("require");
-    return req("expo-clipboard");
-  } catch {
-    return null;
-  }
-}
+// expo-clipboard imported directly at top of file
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -734,18 +726,13 @@ export default function AuthPage() {
     const clean = String(code || "").trim();
     if (!clean) return;
 
-    const Clipboard = getOptionalClipboardModule();
-    if (Clipboard?.setStringAsync) {
-      try {
-        await Clipboard.setStringAsync(clean);
-        showToast("Copied invite code");
-        return;
-      } catch (e) {
-        console.log("Clipboard copy failed:", e?.message || e);
-      }
+    try {
+      await Clipboard.setStringAsync(clean);
+      showToast("Copied invite code");
+    } catch (e) {
+      console.log("Clipboard copy failed:", e?.message || e);
+      showToast("Could not copy — long-press code to select");
     }
-
-    showToast("Press & hold code to copy");
   };
 
   const createFleetNow = async (expectedUser) => {
