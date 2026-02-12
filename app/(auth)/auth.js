@@ -785,7 +785,17 @@ export default function AuthPage() {
 
         // ✅ block handshake if session mismatched (safety)
         await assertServerIsExpected(userId, server.email || null, "before-handshake(create)");
-        await handshakeDevice({ groupId: owned.groupId, displayName: dnStored });
+        const hsOwned = await handshakeDevice({ groupId: owned.groupId, displayName: dnStored });
+        if (!hsOwned?.ok) {
+          openModal({
+            variant: "error",
+            title: "Device Registration Failed",
+            message: `Fleet exists but device could not register: ${hsOwned?.error || "Unknown error"}\n\nPlease try again.`,
+            primaryText: "RETRY",
+            onPrimary: () => createFleetNow(expectedUser),
+          });
+          return;
+        }
         await kickTrackerRebind("create-owned");
 
         openModal({
@@ -834,7 +844,17 @@ export default function AuthPage() {
       await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
 
       await assertServerIsExpected(userId, server.email || null, "before-handshake(create2)");
-      await handshakeDevice({ groupId: createdGroupId, displayName: dnStored });
+      const hsNew = await handshakeDevice({ groupId: createdGroupId, displayName: dnStored });
+      if (!hsNew?.ok) {
+        openModal({
+          variant: "error",
+          title: "Device Registration Failed",
+          message: `Fleet created but device could not register: ${hsNew?.error || "Unknown error"}\n\nPlease try again.`,
+          primaryText: "RETRY",
+          onPrimary: () => createFleetNow(expectedUser),
+        });
+        return;
+      }
       await kickTrackerRebind("create-new");
 
       openModal({
@@ -892,6 +912,16 @@ export default function AuthPage() {
 
     if (!cleanEmail || !password) {
       openModal({ variant: "info", title: "Missing Info", message: "Please enter email and password." });
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      openModal({ variant: "info", title: "Invalid Email", message: "Please enter a valid email address." });
+      return;
+    }
+
+    if (authMode === "signup" && password.length < 6) {
+      openModal({ variant: "info", title: "Weak Password", message: "Password must be at least 6 characters." });
       return;
     }
 
@@ -1077,7 +1107,15 @@ export default function AuthPage() {
 
         // ✅ HARD BLOCK: do not handshake unless session is still correct
         await assertServerIsExpected(matched.id, matched.email || cleanEmail, "before-handshake(join)");
-        await handshakeDevice({ groupId, displayName: dn });
+        const hsJoin = await handshakeDevice({ groupId, displayName: dn });
+        if (!hsJoin?.ok) {
+          openModal({
+            variant: "error",
+            title: "Device Registration Failed",
+            message: `Joined fleet but device could not register: ${hsJoin?.error || "Unknown error"}\n\nPlease restart the app and try again.`,
+          });
+          return;
+        }
         await kickTrackerRebind("join");
 
         await logAuth("after-join");
@@ -1108,8 +1146,14 @@ export default function AuthPage() {
         });
 
         if (joinErr) {
-          await AsyncStorage.removeItem(STORAGE_KEY_PENDING_INVITE);
-          await AsyncStorage.removeItem(STORAGE_KEY_PENDING_FLEET_TYPE);
+          // ✅ Don't clear pending invite on failure — user should retry
+          openModal({
+            variant: "error",
+            title: "Fleet Join Failed",
+            message: `Could not join fleet with code "${pending}".\n\nError: ${joinErr?.message || "Unknown error"}\n\nPlease log in again to retry.`,
+            primaryText: "OK",
+          });
+          return;
         } else {
           const extracted = extractGroupIdFromRpc(joinData);
           const expected = extracted || targetGroupId;
@@ -1127,7 +1171,15 @@ export default function AuthPage() {
             await AsyncStorage.removeItem(STORAGE_KEY_POST_LOGIN_ACTION);
 
             await assertServerIsExpected(matched.id, matched.email || cleanEmail, "before-handshake(pending)");
-            await handshakeDevice({ groupId, displayName: dn });
+            const hsPending = await handshakeDevice({ groupId, displayName: dn });
+            if (!hsPending?.ok) {
+              openModal({
+                variant: "error",
+                title: "Device Registration Failed",
+                message: `Joined fleet but device could not register: ${hsPending?.error || "Unknown error"}\n\nPlease restart the app and try again.`,
+              });
+              return;
+            }
             await kickTrackerRebind("pending-join");
 
             openModal({
@@ -1157,7 +1209,11 @@ export default function AuthPage() {
         await AsyncStorage.removeItem(STORAGE_KEY_POST_LOGIN_ACTION);
 
         await assertServerIsExpected(matched.id, matched.email || cleanEmail, "before-handshake(resume)");
-        await handshakeDevice({ groupId: existingGroupId, displayName: dn });
+        const hsResume = await handshakeDevice({ groupId: existingGroupId, displayName: dn });
+        if (!hsResume?.ok) {
+          console.log("⚠️ Resume handshake failed:", hsResume?.error);
+          // Non-blocking on resume — user can still enter app, handshake will retry on next sync
+        }
         await kickTrackerRebind("resume");
 
         router.replace("/(app)/fleet");
