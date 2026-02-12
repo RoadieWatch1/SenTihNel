@@ -584,6 +584,7 @@
     @keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
     @keyframes bars { 0%{height:20%} 100%{height:100%} }
+    @keyframes fadeInOut { 0%{opacity:0;transform:translateX(-50%) translateY(-10px)} 10%{opacity:1;transform:translateX(-50%) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
 
     /* ═══════════════════════════════════════════════════════════════
        LOGIN OVERLAY
@@ -1153,6 +1154,8 @@
     let memberMarkers = {}; // deviceId -> marker instance
     let fleetChannel = null;
     let trackingChannel = null;
+    let sosBroadcastChannel = null;  // ✅ SOS broadcast listener
+    let sosSelectInFlight = false;   // ✅ Guard against rapid SOS selection
     let authMode = 'login'; // 'login' or 'signup'
 
     const STYLE_OVERRIDE = (urlParams.get('style') || '').trim();
@@ -1366,6 +1369,10 @@
         try { db.removeChannel(trackingChannel); } catch (e) {}
         trackingChannel = null;
       }
+      if (sosBroadcastChannel) {
+        try { db.removeChannel(sosBroadcastChannel); } catch (e) {}
+        sosBroadcastChannel = null;
+      }
 
       // Clear map markers
       Object.values(memberMarkers).forEach(m => { try { m.remove(); } catch (e) {} });
@@ -1483,6 +1490,16 @@
 
       if (!newFleetId || newFleetId === currentFleetId) return;
 
+      // ✅ FIX: Reset video connection on fleet switch
+      selectedSOSDeviceId = null;
+      DEVICE_ID = null;
+      await safeLeaveAgora();
+      camTracks.front = null;
+      remoteAudioTrack = null;
+      audioUnmuted = false;
+      showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
+      updateAudioButton();
+
       currentFleetId = newFleetId;
       await loadFleetData();
     }
@@ -1496,6 +1513,10 @@
       }
       if (trackingChannel) {
         try { db.removeChannel(trackingChannel); } catch (e) {}
+      }
+      if (sosBroadcastChannel) {
+        try { db.removeChannel(sosBroadcastChannel); } catch (e) {}
+        sosBroadcastChannel = null;
       }
 
       // Clear old markers
@@ -1588,6 +1609,31 @@
           }
         )
         .subscribe();
+
+      // ✅ FIX: Subscribe to SOS broadcast channel (real-time alerts, not just DB changes)
+      sosBroadcastChannel = db.channel(`sos:${currentFleetId}`)
+        .on('broadcast', { event: 'sos_alert' }, (payload) => {
+          const data = payload?.payload;
+          if (!data) return;
+          console.log('[SOS BROADCAST] Alert received:', data.device_id);
+          handleSOSBroadcast(data);
+        })
+        .on('broadcast', { event: 'sos_cancel' }, (payload) => {
+          const data = payload?.payload;
+          if (!data) return;
+          console.log('[SOS BROADCAST] Cancel received:', data.device_id);
+          handleSOSCancelBroadcast(data);
+        })
+        .on('broadcast', { event: 'sos_acknowledge' }, (payload) => {
+          const data = payload?.payload;
+          if (!data) return;
+          console.log('[SOS BROADCAST] Acknowledge received:', data.device_id);
+        })
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('SOS broadcast channel connected for fleet:', currentFleetId?.slice(0, 8));
+          }
+        });
     }
 
     function handleMemberUpdate(data) {
@@ -1601,6 +1647,7 @@
       const memberIdx = fleetMembers.findIndex(m => m.deviceId === deviceId);
 
       if (memberIdx >= 0) {
+        const prevStatus = fleetMembers[memberIdx].status;
         // Update existing member
         fleetMembers[memberIdx] = {
           ...fleetMembers[memberIdx],
@@ -1611,6 +1658,12 @@
           battery: data.battery_level,
           gpsQuality: data.gps_quality
         };
+
+        // ✅ FIX: Detect SOS cancellation and show notification
+        const newStatus = data.status || 'OFFLINE';
+        if (prevStatus === 'SOS' && newStatus !== 'SOS') {
+          showSOSResolvedToast(fleetMembers[memberIdx].displayName || deviceId?.substring(0, 8));
+        }
       } else if (deviceId && data.group_id === currentFleetId) {
         // New device joined this fleet - add to list and mark active
         activeDeviceSet.add(deviceId);
@@ -1625,6 +1678,14 @@
           battery: data.battery_level,
           gpsQuality: data.gps_quality
         });
+        // ✅ FIX: Fetch actual display name from devices table
+        db.from('devices').select('display_name').eq('device_id', deviceId).eq('group_id', currentFleetId).maybeSingle()
+          .then(({ data: devRow }) => {
+            if (devRow?.display_name) {
+              const m = fleetMembers.find(m => m.deviceId === deviceId);
+              if (m) { m.displayName = devRow.display_name; updateMembersList(); updateMapMarkers(); }
+            }
+          }).catch(() => {});
       }
 
       // Update active SOS list
@@ -1645,6 +1706,69 @@
       if (newStatus === 'SOS' && !selectedSOSDeviceId) {
         selectSOSMember(deviceId);
       }
+    }
+
+    // ✅ Handle real-time SOS broadcast (instant, before DB writes)
+    function handleSOSBroadcast(data) {
+      const deviceId = data?.device_id;
+      if (!deviceId) return;
+
+      let member = fleetMembers.find(m => m.deviceId === deviceId);
+      if (member) {
+        member.status = 'SOS';
+        member.latitude = data.lat ?? data.latitude ?? member.latitude;
+        member.longitude = data.lng ?? data.longitude ?? member.longitude;
+        member.lastUpdated = new Date().toISOString();
+      }
+
+      activeSOSList = fleetMembers.filter(m => m.status === 'SOS');
+      updateMembersList();
+      updateSOSList();
+      updateMapMarkers();
+
+      if (!selectedSOSDeviceId) {
+        selectSOSMember(deviceId);
+      }
+    }
+
+    // ✅ Handle real-time SOS cancel broadcast
+    function handleSOSCancelBroadcast(data) {
+      const deviceId = data?.device_id;
+      if (!deviceId) return;
+
+      const member = fleetMembers.find(m => m.deviceId === deviceId);
+      if (member) {
+        const wasSOS = member.status === 'SOS';
+        member.status = 'OFFLINE';
+        activeSOSList = fleetMembers.filter(m => m.status === 'SOS');
+        updateMembersList();
+        updateSOSList();
+        updateMapMarkers();
+
+        if (wasSOS) {
+          showSOSResolvedToast(member.displayName || deviceId?.substring(0, 8));
+        }
+      }
+    }
+
+    // ✅ Toast notification for SOS resolved
+    function showSOSResolvedToast(name) {
+      const existing = document.getElementById('sos-resolved-toast');
+      if (existing) existing.remove();
+
+      const toast = document.createElement('div');
+      toast.id = 'sos-resolved-toast';
+      toast.style.cssText = `
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        z-index: 10000; background: rgba(0,255,157,0.15); border: 1px solid rgba(0,255,157,0.7);
+        color: #00ff9d; padding: 14px 24px; font-family: 'Share Tech Mono', monospace;
+        font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
+        box-shadow: 0 0 25px rgba(0,255,157,0.2); backdrop-filter: blur(8px);
+        animation: fadeInOut 4s ease forwards;
+      `;
+      toast.textContent = `SOS RESOLVED — ${name}`;
+      document.body.appendChild(toast);
+      setTimeout(() => { try { toast.remove(); } catch {} }, 4500);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1791,6 +1915,15 @@
           memberMarkers[member.deviceId] = newMarker;
         }
       });
+
+      // ✅ FIX: Remove markers for devices no longer in the fleet
+      const currentDeviceIds = new Set(fleetMembers.map(m => m.deviceId));
+      Object.keys(memberMarkers).forEach(deviceId => {
+        if (!currentDeviceIds.has(deviceId)) {
+          try { memberMarkers[deviceId].remove(); } catch (e) {}
+          delete memberMarkers[deviceId];
+        }
+      });
     }
 
     function focusOnMember(member) {
@@ -1814,26 +1947,34 @@
       // Skip if already selected and video is running (prevents infinite loop)
       if (selectedSOSDeviceId === deviceId && agoraClient) return;
 
-      selectedSOSDeviceId = deviceId;
-      DEVICE_ID = deviceId; // Update global device ID for video
+      // ✅ FIX: Prevent race condition from rapid clicks
+      if (sosSelectInFlight) return;
+      sosSelectInFlight = true;
 
-      // Update SOS list UI
-      updateSOSList();
+      try {
+        selectedSOSDeviceId = deviceId;
+        DEVICE_ID = deviceId; // Update global device ID for video
 
-      // Reconnect video to new SOS
-      await safeLeaveAgora();
-      camTracks.front = null;
-      remoteAudioTrack = null;
-      showOverlay(true, 'CONNECTING TO SOS FEED...');
-      await startVideo();
+        // Update SOS list UI
+        updateSOSList();
 
-      // Focus map on this member (map pan only — no recursion)
-      const member = fleetMembers.find(m => m.deviceId === deviceId);
-      if (member) focusOnMember(member);
+        // Reconnect video to new SOS
+        await safeLeaveAgora();
+        camTracks.front = null;
+        remoteAudioTrack = null;
+        showOverlay(true, 'CONNECTING TO SOS FEED...');
+        await startVideo();
 
-      // Trigger police scan for new location
-      if (member && member.latitude && member.longitude) {
-        setTimeout(() => scanForPolice(member.latitude, member.longitude), 500);
+        // Focus map on this member (map pan only — no recursion)
+        const member = fleetMembers.find(m => m.deviceId === deviceId);
+        if (member) focusOnMember(member);
+
+        // Trigger police scan for new location
+        if (member && member.latitude && member.longitude) {
+          setTimeout(() => scanForPolice(member.latitude, member.longitude), 500);
+        }
+      } finally {
+        sosSelectInFlight = false;
       }
     }
 
@@ -2573,6 +2714,16 @@
     async function createAndJoinAgora() {
       if (!DEVICE_ID) return;
 
+      // ✅ FIX: Check Agora SDK loaded
+      if (typeof AgoraRTC === 'undefined') {
+        showOverlay(true, 'VIDEO SDK FAILED TO LOAD — REFRESH PAGE');
+        setTopStatus('SDK ERROR');
+        return;
+      }
+
+      // ✅ FIX: Capture device ID at join time (DEVICE_ID is mutable — may change if user switches SOS)
+      const joinedDeviceId = DEVICE_ID;
+
       // Fetch server-issued token (required — no fallback)
       let agoraToken = null;
       try {
@@ -2692,10 +2843,11 @@
       });
 
       // Token renewal: Agora fires this ~30s before expiry
+      // ✅ FIX: Use joinedDeviceId (not mutable DEVICE_ID) to renew for the correct channel
       agoraClient.on('token-privilege-will-expire', async () => {
-        console.log('Agora token expiring, renewing...');
+        console.log('Agora token expiring, renewing for channel:', joinedDeviceId);
         try {
-          const tokenData = await fetchAgoraToken(DEVICE_ID, 'subscriber', DASH_UID);
+          const tokenData = await fetchAgoraToken(joinedDeviceId, 'subscriber', DASH_UID);
           await agoraClient.renewToken(tokenData.token);
           console.log('Agora token renewed for dashUid:', DASH_UID);
         } catch (e) {
