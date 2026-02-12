@@ -133,6 +133,34 @@ async function getDisplayName() {
   }
 }
 
+// ✅ Fetch ALL group_ids the user belongs to (member + owner)
+async function getAllMyGroupIdsSafe() {
+  try {
+    const { data: auth } = await supabase.auth.getUser();
+    const userId = auth?.user?.id;
+    if (!userId) return [];
+
+    // Fetch groups where user is a member
+    const { data: memberData } = await supabase
+      .from("group_members")
+      .select("group_id")
+      .eq("user_id", userId);
+
+    // Also fetch groups where user is the owner (may not have a group_members row)
+    const { data: ownerData } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("owner_user_id", userId);
+
+    const memberIds = (memberData || []).map((r) => r.group_id).filter(Boolean);
+    const ownerIds = (ownerData || []).map((r) => r.id).filter(Boolean);
+
+    return Array.from(new Set([...memberIds, ...ownerIds]));
+  } catch {
+    return [];
+  }
+}
+
 async function safeSetSOSActive() {
   // Some builds had setSOSActive(true), some had setSOSActive() — support both safely.
   try {
@@ -823,8 +851,13 @@ export const sendBatSignal = async (arg) => {
       ? String(arg.guardianNumber)
       : GUARDIAN_PHONE_NUMBER;
 
-  const groupId = await getGroupId();
+  const currentGroupId = await getGroupId();
   const displayName = await getDisplayName();
+
+  // ✅ Fetch ALL groups the user belongs to (member + owner)
+  const allGroupIds = await getAllMyGroupIdsSafe();
+  const targets = Array.from(new Set([currentGroupId, ...allGroupIds])).filter(Boolean);
+  console.log("🚨 SOS targets:", targets.length, "fleets");
 
   // ✅ FAST last-known first, then refine
   const { fast, refined } = await getFastThenRefineLocation();
@@ -840,33 +873,39 @@ export const sendBatSignal = async (arg) => {
   // Force immediate SOS sync using last-known coords if we have them
   await safeForceSOSSync({ lat: fastLat, lng: fastLng, accuracy: fastAcc });
 
-  // Fleet-wide in-app alert (realtime broadcast) — with retry on failure
-  const broadcastArgs = { groupId, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng };
-  const broadcastOk = await tryBroadcastSOS(broadcastArgs);
-  if (broadcastOk) {
-    console.log("✅ SOS broadcast delivered (in-app)");
-  } else {
-    // ✅ Broadcast failed (network saturated or down) — retry in background
-    // This is critical: if broadcast doesn't reach fleet, they won't know about the SOS
-    console.log("⚠️ SOS broadcast failed — scheduling retries in background");
+  // ✅ Fleet-wide in-app alert — broadcast to ALL fleets the user belongs to
+  let anyBroadcastOk = false;
+  for (const gid of targets) {
+    const broadcastArgs = { groupId: gid, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng };
+    const ok = await tryBroadcastSOS(broadcastArgs);
+    if (ok) {
+      console.log("✅ SOS broadcast delivered to fleet:", gid?.slice(0, 8));
+      anyBroadcastOk = true;
+    }
+  }
+
+  if (!anyBroadcastOk) {
+    // All broadcasts failed — retry in background
+    console.log("⚠️ SOS broadcast failed for all fleets — scheduling retries in background");
     (async () => {
       for (let retry = 1; retry <= 3; retry++) {
-        await sleep(5000); // Wait 5s between retries (network may recover)
-        try {
-          const ok = await tryBroadcastSOS(broadcastArgs);
-          if (ok) {
-            console.log(`✅ SOS broadcast retry #${retry} succeeded`);
-            return;
-          }
-        } catch {}
-        console.log(`⚠️ SOS broadcast retry #${retry} failed`);
+        await sleep(5000);
+        for (const gid of targets) {
+          try {
+            const ok = await tryBroadcastSOS({ groupId: gid, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng });
+            if (ok) {
+              console.log(`✅ SOS broadcast retry #${retry} succeeded for fleet:`, gid?.slice(0, 8));
+            }
+          } catch {}
+        }
       }
-      console.log("⚠️ SOS broadcast: all retries exhausted (push notifications are the fallback)");
     })();
   }
 
-  // Trigger push notifications for background/offline users (fallback if pg_net unavailable)
-  triggerPushNotifications({ deviceId, groupId, displayName, lat: fastLat, lng: fastLng });
+  // ✅ Trigger push notifications for ALL fleets (background/offline users)
+  for (const gid of targets) {
+    triggerPushNotifications({ deviceId, groupId: gid, displayName, lat: fastLat, lng: fastLng });
+  }
 
   // ✅ If we got a refined current GPS fix, sync again (best-effort upgrade)
   const refLat = safeNum(refined?.coords?.latitude, null);
@@ -1013,21 +1052,25 @@ export const cancelBatSignal = async () => {
   console.log("🟢 SOS CANCEL: Restoring privacy (stopping all sharing)...");
 
   // ✅ Step 0: Resolve identifiers upfront (needed for broadcast + cleanup)
-  let deviceId, groupId, displayName;
+  let deviceId, currentGroupId, displayName;
   try {
     deviceId = await getDeviceId();
-    groupId = await getGroupId();
+    currentGroupId = await getGroupId();
     displayName = await getDisplayName();
   } catch {}
+
+  // ✅ Fetch ALL groups to cancel across all fleets
+  const allGroupIds = await getAllMyGroupIdsSafe();
+  const cancelTargets = Array.from(new Set([currentGroupId, ...allGroupIds])).filter(Boolean);
 
   // ✅ Step 1a: Quick OFFLINE RPC FIRST — so DB is updated before fleet re-fetches
   // Short timeout (1.5s) so it doesn't delay the broadcast. If it fails, Step 3 retries.
   try {
-    if (deviceId && groupId) {
+    if (deviceId && currentGroupId) {
       const { error } = await withTimeout(
         supabase.rpc("upsert_tracking_session", {
           p_device_id: deviceId,
-          p_group_id: groupId,
+          p_group_id: currentGroupId,
           p_data: {
             status: "OFFLINE",
             last_updated: new Date().toISOString(),
@@ -1043,28 +1086,30 @@ export const cancelBatSignal = async () => {
     console.log("⚠️ Quick OFFLINE RPC timeout (will retry in Step 3):", e?.message || e);
   }
 
-  // ✅ Step 1b: BROADCAST CANCEL — this is what stops alarms on other devices
-  // Must happen before any cleanup that could hang (e.g., stopLiveTracking on Android)
-  try {
-    if (deviceId && groupId) {
-      const ok = await withTimeout(
-        tryBroadcastCancel({ groupId, deviceId, displayName }),
-        3000,
-        "broadcast_cancel_timeout"
-      );
-      if (ok) console.log("✅ SOS cancel broadcast delivered (in-app)");
-      else console.log("⚠️ SOS cancel broadcast may not have reached fleet");
+  // ✅ Step 1b: BROADCAST CANCEL to ALL fleets — stops alarms on other devices
+  for (const gid of cancelTargets) {
+    try {
+      if (deviceId) {
+        const ok = await withTimeout(
+          tryBroadcastCancel({ groupId: gid, deviceId, displayName }),
+          3000,
+          "broadcast_cancel_timeout"
+        );
+        if (ok) console.log("✅ SOS cancel broadcast delivered to fleet:", gid?.slice(0, 8));
+      }
+    } catch (e) {
+      console.log("⚠️ Broadcast cancel failed for fleet:", gid?.slice(0, 8), e?.message || e);
     }
-  } catch (e) {
-    console.log("⚠️ Broadcast cancel failed (non-fatal):", e?.message || e);
   }
 
-  // ✅ Step 2: Send CANCEL push notification so background/offline users get notified
-  try {
-    if (deviceId && groupId) {
-      triggerCancelPushNotification({ deviceId, groupId, displayName });
-    }
-  } catch {}
+  // ✅ Step 2: Send CANCEL push notification to ALL fleets
+  for (const gid of cancelTargets) {
+    try {
+      if (deviceId) {
+        triggerCancelPushNotification({ deviceId, groupId: gid, displayName });
+      }
+    } catch {}
+  }
 
   // ✅ Step 3: Run ALL cleanup in PARALLEL (nothing should block the cancel)
   await Promise.allSettled([
@@ -1096,11 +1141,11 @@ export const cancelBatSignal = async () => {
     // ✅ Force DB status to OFFLINE via RPC (reliable backup — direct upsert may fail due to RLS)
     (async () => {
       try {
-        if (deviceId && groupId) {
+        if (deviceId && currentGroupId) {
           const { error } = await withTimeout(
             supabase.rpc("upsert_tracking_session", {
               p_device_id: deviceId,
-              p_group_id: groupId,
+              p_group_id: currentGroupId,
               p_data: {
                 status: "OFFLINE",
                 last_updated: new Date().toISOString(),
@@ -1127,13 +1172,13 @@ export const cancelBatSignal = async () => {
     clearTimeout(offlineRetryTimer);
     offlineRetryTimer = null;
   }
-  if (deviceId && groupId) {
+  if (deviceId && currentGroupId) {
     offlineRetryTimer = setTimeout(async () => {
       offlineRetryTimer = null;
       try {
         const { error } = await supabase.rpc("upsert_tracking_session", {
           p_device_id: deviceId,
-          p_group_id: groupId,
+          p_group_id: currentGroupId,
           p_data: {
             status: "OFFLINE",
             last_updated: new Date().toISOString(),

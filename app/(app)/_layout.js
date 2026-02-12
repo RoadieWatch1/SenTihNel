@@ -99,15 +99,41 @@ export default function AppLayout() {
 
     const initSOSManager = async () => {
       try {
-        const groupId = await AsyncStorage.getItem("sentinel_group_id");
         const deviceId = await AsyncStorage.getItem("sentinel_device_id");
 
-        if (!groupId) {
-          console.log("AppLayout: No group ID, skipping SOS manager init");
+        // ✅ Fetch ALL groups the user belongs to (member + owner)
+        let allGroupIds = [];
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          const userId = user?.id;
+          if (userId) {
+            const { data: memberData } = await supabase
+              .from("group_members")
+              .select("group_id")
+              .eq("user_id", userId);
+            const { data: ownerData } = await supabase
+              .from("groups")
+              .select("id")
+              .eq("owner_user_id", userId);
+
+            const memberIds = (memberData || []).map((r) => r.group_id).filter(Boolean);
+            const ownerIds = (ownerData || []).map((r) => r.id).filter(Boolean);
+            allGroupIds = Array.from(new Set([...memberIds, ...ownerIds]));
+          }
+        } catch {}
+
+        // Fallback to current group if query failed
+        if (allGroupIds.length === 0) {
+          const fallbackId = await AsyncStorage.getItem("sentinel_group_id");
+          if (fallbackId) allGroupIds = [fallbackId];
+        }
+
+        if (allGroupIds.length === 0) {
+          console.log("AppLayout: No group IDs, skipping SOS manager init");
           return;
         }
 
-        await SOSAlertManager.initialize(groupId, deviceId, {
+        await SOSAlertManager.initialize(allGroupIds, deviceId, {
           onSOSReceived: (data) => {
             if (!mounted) return;
             console.log("AppLayout: SOS received", data);

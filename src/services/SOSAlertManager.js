@@ -34,12 +34,12 @@ const RESOLVED_POLL_INTERVAL_MS = 15_000; // Check every 15 seconds
 // ============================================
 
 let isInitialized = false;
-let currentGroupId = null;
+let currentGroupIds = []; // ✅ Multi-group support
 let myDeviceId = null;
-let realtimeChannel = null; // Broadcast channel (critical — must always work)
-let dbWatchChannel = null; // Postgres changes channel (optional — best-effort backup)
-let channelRetryTimer = null;
-let channelRetryCount = 0;
+let realtimeChannels = new Map(); // groupId -> channel (broadcast — critical)
+let dbWatchChannels = new Map(); // groupId -> channel (postgres_changes — backup)
+let channelRetryTimers = new Map(); // groupId -> timer
+let channelRetryCounts = new Map(); // groupId -> count
 let appStateSubscription = null;
 let notificationSubscriptions = [];
 let resolvedPollTimer = null; // ✅ Periodic DB poll for missed cancel broadcasts
@@ -59,17 +59,25 @@ let activeSOSAlerts = new Map(); // deviceId -> sosData
 /**
  * Initialize the SOS Alert Manager
  * Call this once when app starts (in _layout.js or App.js)
+ * ✅ Now accepts an array of groupIds to listen on ALL user fleets
+ * Also accepts a single groupId string for backwards compatibility
  */
-async function initialize(groupId, deviceId, callbacks = {}) {
-  if (isInitialized && currentGroupId === groupId) {
-    console.log("SOSAlertManager: Already initialized for this group");
+async function initialize(groupIds, deviceId, callbacks = {}) {
+  // Normalize: accept single string or array
+  const ids = Array.from(new Set(
+    (Array.isArray(groupIds) ? groupIds : [groupIds]).filter(Boolean).map(String)
+  ));
+
+  // Check if already initialized with same groups
+  if (isInitialized && JSON.stringify(currentGroupIds.sort()) === JSON.stringify(ids.sort())) {
+    console.log("SOSAlertManager: Already initialized for these groups");
     return;
   }
 
-  console.log("SOSAlertManager: Initializing for group", groupId);
+  console.log("SOSAlertManager: Initializing for", ids.length, "groups:", ids.map(g => g?.slice(0, 8)));
 
   // Store references
-  currentGroupId = groupId;
+  currentGroupIds = ids;
   myDeviceId = deviceId || (await AsyncStorage.getItem(MY_DEVICE_ID_KEY));
   onSOSReceived = callbacks.onSOSReceived || null;
   onSOSCancelled = callbacks.onSOSCancelled || null;
@@ -78,16 +86,19 @@ async function initialize(groupId, deviceId, callbacks = {}) {
   // Cleanup any existing subscriptions
   await cleanup();
 
-  // Register for push notifications
+  // Register push tokens for ALL groups
   const pushToken = await NotificationService.registerForPushNotifications();
-  if (pushToken && myDeviceId && groupId) {
-    await NotificationService.savePushTokenToSupabase(pushToken, myDeviceId, groupId);
+  if (pushToken && myDeviceId) {
+    for (const gid of ids) {
+      await NotificationService.savePushTokenToSupabase(pushToken, myDeviceId, gid);
+    }
   }
 
-  // ✅ FIX: Subscribe to broadcast events (critical) and DB changes (optional backup)
-  // These are on SEPARATE channels so a postgres_changes failure can't kill broadcast reception
-  subscribeToRealtimeChannel(groupId);
-  subscribeToDbWatchChannel(groupId);
+  // ✅ Subscribe to broadcast + DB changes for EACH group
+  for (const gid of ids) {
+    subscribeToRealtimeChannel(gid);
+    subscribeToDbWatchChannel(gid);
+  }
 
   // Listen for app state changes
   setupAppStateListener();
@@ -95,11 +106,13 @@ async function initialize(groupId, deviceId, callbacks = {}) {
   // Setup notification response listeners
   setupNotificationListeners();
 
-  // Check for any active SOS alerts we might have missed
-  await checkForActiveSOSAlerts(groupId);
+  // Check for any active SOS alerts we might have missed (all groups)
+  for (const gid of ids) {
+    await checkForActiveSOSAlerts(gid);
+  }
 
   isInitialized = true;
-  console.log("SOSAlertManager: Initialized successfully");
+  console.log("SOSAlertManager: Initialized successfully for", ids.length, "groups");
 }
 
 /**
@@ -108,30 +121,27 @@ async function initialize(groupId, deviceId, callbacks = {}) {
 async function cleanup() {
   console.log("SOSAlertManager: Cleaning up");
 
-  // Clear retry timer
-  if (channelRetryTimer) {
-    clearTimeout(channelRetryTimer);
-    channelRetryTimer = null;
+  // Clear all retry timers
+  for (const [, timer] of channelRetryTimers) {
+    clearTimeout(timer);
   }
-  channelRetryCount = 0;
+  channelRetryTimers.clear();
+  channelRetryCounts.clear();
 
   // ✅ Clear resolved-alert polling timer
   stopResolvedPoll();
 
-  // Remove realtime channels
-  if (realtimeChannel) {
-    try {
-      await supabase.removeChannel(realtimeChannel);
-    } catch {}
-    realtimeChannel = null;
+  // Remove all realtime channels
+  for (const [, ch] of realtimeChannels) {
+    try { await supabase.removeChannel(ch); } catch {}
   }
+  realtimeChannels.clear();
 
-  if (dbWatchChannel) {
-    try {
-      await supabase.removeChannel(dbWatchChannel);
-    } catch {}
-    dbWatchChannel = null;
+  // Remove all DB watch channels
+  for (const [, ch] of dbWatchChannels) {
+    try { await supabase.removeChannel(ch); } catch {}
   }
+  dbWatchChannels.clear();
 
   // Remove app state subscription
   if (appStateSubscription) {
@@ -178,20 +188,20 @@ function subscribeToRealtimeChannel(groupId) {
 
   // Subscribe with retry logic
   channel.subscribe((status) => {
-    console.log("SOSAlertManager: Broadcast channel status:", status);
+    console.log("SOSAlertManager: Broadcast channel status:", status, "for", groupId?.slice(0, 8));
 
     if (status === "SUBSCRIBED") {
-      console.log("SOSAlertManager: Broadcast channel connected successfully");
-      channelRetryCount = 0; // Reset on success
+      console.log("SOSAlertManager: Broadcast channel connected for", groupId?.slice(0, 8));
+      channelRetryCounts.set(groupId, 0); // Reset on success
     }
 
     if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-      console.log("SOSAlertManager: Broadcast channel failed, will retry...");
+      console.log("SOSAlertManager: Broadcast channel failed for", groupId?.slice(0, 8), "will retry...");
       scheduleChannelRetry(groupId);
     }
   });
 
-  realtimeChannel = channel;
+  realtimeChannels.set(groupId, channel);
 }
 
 /**
@@ -243,7 +253,7 @@ function subscribeToDbWatchChannel(groupId) {
       }
     });
 
-    dbWatchChannel = channel;
+    dbWatchChannels.set(groupId, channel);
   } catch (e) {
     // Complete failure is non-fatal — broadcast handles the critical path
     console.log("SOSAlertManager: DB watch setup failed (non-fatal):", e?.message || e);
@@ -254,35 +264,39 @@ function subscribeToDbWatchChannel(groupId) {
  * ✅ FIX: Retry channel connection with exponential backoff
  */
 function scheduleChannelRetry(groupId) {
-  if (channelRetryCount >= MAX_CHANNEL_RETRIES) {
-    console.log("SOSAlertManager: Max retries reached, will retry on next app resume");
+  const retryCount = channelRetryCounts.get(groupId) || 0;
+  if (retryCount >= MAX_CHANNEL_RETRIES) {
+    console.log("SOSAlertManager: Max retries reached for", groupId?.slice(0, 8), "will retry on next app resume");
     return;
   }
 
-  // Clear any existing timer
-  if (channelRetryTimer) {
-    clearTimeout(channelRetryTimer);
-  }
+  // Clear any existing timer for this group
+  const existingTimer = channelRetryTimers.get(groupId);
+  if (existingTimer) clearTimeout(existingTimer);
 
-  const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, channelRetryCount);
-  channelRetryCount++;
+  const newCount = retryCount + 1;
+  channelRetryCounts.set(groupId, newCount);
+  const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, retryCount);
 
-  console.log(`SOSAlertManager: Retrying channel in ${delay}ms (attempt ${channelRetryCount}/${MAX_CHANNEL_RETRIES})`);
+  console.log(`SOSAlertManager: Retrying channel for ${groupId?.slice(0, 8)} in ${delay}ms (attempt ${newCount}/${MAX_CHANNEL_RETRIES})`);
 
-  channelRetryTimer = setTimeout(async () => {
-    // Remove old channel
-    if (realtimeChannel) {
-      try {
-        await supabase.removeChannel(realtimeChannel);
-      } catch {}
-      realtimeChannel = null;
+  const timer = setTimeout(async () => {
+    channelRetryTimers.delete(groupId);
+
+    // Remove old channel for this group
+    const oldCh = realtimeChannels.get(groupId);
+    if (oldCh) {
+      try { await supabase.removeChannel(oldCh); } catch {}
+      realtimeChannels.delete(groupId);
     }
 
-    // Re-subscribe
-    if (currentGroupId === groupId) {
+    // Re-subscribe if this group is still in our list
+    if (currentGroupIds.includes(groupId)) {
       subscribeToRealtimeChannel(groupId);
     }
   }, delay);
+
+  channelRetryTimers.set(groupId, timer);
 }
 
 // ============================================
@@ -429,29 +443,31 @@ function setupAppStateListener() {
 
     if (nextState === "active") {
       // App came to foreground
-      // ✅ FIX: Re-check database for SOS status changes we may have missed while backgrounded
-      // This catches both new SOS alerts AND cancellations that happened while offline
-      if (currentGroupId) {
-        await checkForActiveSOSAlerts(currentGroupId);
-        await checkForResolvedAlerts(currentGroupId);
+      // ✅ Re-check database for SOS status changes we may have missed while backgrounded
+      for (const gid of currentGroupIds) {
+        await checkForActiveSOSAlerts(gid);
+        await checkForResolvedAlerts(gid);
       }
 
-      // ✅ Always reconnect channels on foreground resume.
-      // WebSocket may have silently died during long background sessions (hours/days).
-      // Fresh connections guarantee we receive SOS broadcasts.
-      if (currentGroupId) {
+      // ✅ Always reconnect channels on foreground resume (all groups).
+      if (currentGroupIds.length > 0) {
         console.log("SOSAlertManager: Reconnecting channels on app resume");
-        channelRetryCount = 0;
-        if (realtimeChannel) {
-          try { await supabase.removeChannel(realtimeChannel); } catch {}
-          realtimeChannel = null;
+        channelRetryCounts.clear();
+
+        for (const [gid, ch] of realtimeChannels) {
+          try { await supabase.removeChannel(ch); } catch {}
         }
-        if (dbWatchChannel) {
-          try { await supabase.removeChannel(dbWatchChannel); } catch {}
-          dbWatchChannel = null;
+        realtimeChannels.clear();
+
+        for (const [gid, ch] of dbWatchChannels) {
+          try { await supabase.removeChannel(ch); } catch {}
         }
-        subscribeToRealtimeChannel(currentGroupId);
-        subscribeToDbWatchChannel(currentGroupId);
+        dbWatchChannels.clear();
+
+        for (const gid of currentGroupIds) {
+          subscribeToRealtimeChannel(gid);
+          subscribeToDbWatchChannel(gid);
+        }
       }
 
       // Check if there are active SOS alerts
@@ -646,7 +662,7 @@ async function checkForResolvedAlerts(groupId) {
  */
 function startResolvedPoll() {
   if (resolvedPollTimer) return; // Already running
-  if (!currentGroupId) return;
+  if (currentGroupIds.length === 0) return;
 
   console.log("SOSAlertManager: Starting resolved-alert polling");
   resolvedPollTimer = setInterval(async () => {
@@ -654,7 +670,9 @@ function startResolvedPoll() {
       stopResolvedPoll();
       return;
     }
-    await checkForResolvedAlerts(currentGroupId);
+    for (const gid of currentGroupIds) {
+      await checkForResolvedAlerts(gid);
+    }
   }, RESOLVED_POLL_INTERVAL_MS);
 }
 
@@ -690,17 +708,19 @@ async function acknowledgeAlert(deviceId) {
     stopResolvedPoll();
   }
 
-  // Broadcast acknowledgment to fleet
-  if (currentGroupId && realtimeChannel) {
-    await realtimeChannel.send({
-      type: "broadcast",
-      event: "sos_acknowledge",
-      payload: {
-        device_id: deviceId,
-        acknowledged_by: myDeviceId,
-        timestamp: Date.now(),
-      },
-    });
+  // Broadcast acknowledgment to all fleet channels
+  for (const [gid, ch] of realtimeChannels) {
+    try {
+      await ch.send({
+        type: "broadcast",
+        event: "sos_acknowledge",
+        payload: {
+          device_id: deviceId,
+          acknowledged_by: myDeviceId,
+          timestamp: Date.now(),
+        },
+      });
+    } catch {}
   }
 }
 
@@ -730,11 +750,16 @@ function hasActiveAlerts() {
 }
 
 /**
- * Update group ID (when user switches fleets)
+ * Update group IDs (when user switches fleets or groups change)
+ * Accepts single groupId (backwards compat) or array
  */
-async function updateGroup(newGroupId, deviceId) {
-  if (newGroupId !== currentGroupId) {
-    await initialize(newGroupId, deviceId, {
+async function updateGroup(newGroupIds, deviceId) {
+  const ids = Array.from(new Set(
+    (Array.isArray(newGroupIds) ? newGroupIds : [newGroupIds]).filter(Boolean).map(String)
+  ));
+  const changed = JSON.stringify(currentGroupIds.sort()) !== JSON.stringify(ids.sort());
+  if (changed) {
+    await initialize(ids, deviceId, {
       onSOSReceived,
       onSOSCancelled,
       onSOSAcknowledged,

@@ -169,7 +169,7 @@ async function savePushTokenToSupabase(token, deviceId, groupId) {
         updated_at: new Date().toISOString(),
       },
       {
-        onConflict: "device_id",
+        onConflict: "device_id,group_id",
       }
     );
 

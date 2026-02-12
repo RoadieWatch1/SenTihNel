@@ -856,11 +856,11 @@ export default function FleetScreen() {
 
       if (deviceIds.length === 0) return;
 
+      // ✅ FIX: Don't filter by group_id — the device may have moved to a different fleet
+      // but its display_name is still valid. tracking_sessions is already filtered by group.
       const { data, error } = await supabase
         .from("devices")
         .select("device_id, display_name")
-        .eq("group_id", gid)
-        .eq("is_active", true)
         .in("device_id", deviceIds);
 
       if (error) {
