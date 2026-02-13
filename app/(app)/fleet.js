@@ -391,14 +391,21 @@ export default function FleetScreen() {
 
   // ✅ Ensure user has both Work and Family fleets (auto-create on first load)
   const ensureUserFleets = useCallback(async () => {
-    try {
-      setFleetsLoading(true);
+    setFleetsLoading(true);
 
-      const { data, error } = await supabase.rpc("ensure_user_fleets");
+    try {
+      // ✅ Session guard — don't RPC if not signed in
+      const { data: sessionRes } = await supabase.auth.getSession();
+      if (!sessionRes?.session?.user?.id) return null;
+
+      // ✅ Hard timeout inside the function (so it can't hang forever)
+      const { data, error } = await Promise.race([
+        supabase.rpc("ensure_user_fleets"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
+      ]);
 
       if (error) {
         console.log("ensure_user_fleets error:", error.message);
-        // Fall back to loading from context if RPC doesn't exist yet
         return null;
       }
 
@@ -407,19 +414,11 @@ export default function FleetScreen() {
         const familyFleet = data.family_fleet || {};
 
         const newOwnedFleets = {
-          work: {
-            groupId: workFleet.group_id || null,
-            inviteCode: workFleet.invite_code || null,
-          },
-          family: {
-            groupId: familyFleet.group_id || null,
-            inviteCode: familyFleet.invite_code || null,
-          },
+          work: { groupId: workFleet.group_id || null, inviteCode: workFleet.invite_code || null },
+          family: { groupId: familyFleet.group_id || null, inviteCode: familyFleet.invite_code || null },
         };
 
-        if (isMountedRef.current) {
-          setOwnedFleets(newOwnedFleets);
-        }
+        if (isMountedRef.current) setOwnedFleets(newOwnedFleets);
 
         console.log("✅ User fleets ensured:", {
           work: workFleet.group_id?.slice(0, 8),
@@ -431,7 +430,7 @@ export default function FleetScreen() {
 
       return null;
     } catch (e) {
-      console.log("ensureUserFleets error:", e?.message || e);
+      console.log("ensureUserFleets timed out or failed:", e?.message || e);
       return null;
     } finally {
       if (isMountedRef.current) setFleetsLoading(false);
@@ -499,6 +498,30 @@ export default function FleetScreen() {
       console.log("resolveGroupIdByInviteCode error:", e?.message || e);
       return null;
     }
+  }, []);
+
+  // ✅ Join fleet with 2-arg → 1-arg fallback (handles DB with or without p_fleet_type)
+  const joinFleetByInviteCode = useCallback(async ({ inviteCode, fleetType }) => {
+    const clean = String(inviteCode || "").trim();
+    if (!clean) throw new Error("Missing invite code");
+
+    // Try 2-arg overload first (p_invite_code + p_fleet_type)
+    const twoArg = await supabase.rpc(RPC_JOIN_GROUP, {
+      p_invite_code: clean,
+      p_fleet_type: fleetType,
+    });
+
+    if (!twoArg.error) return twoArg;
+
+    // Fallback: 1-arg overload (p_invite_code only)
+    const oneArg = await supabase.rpc(RPC_JOIN_GROUP, {
+      p_invite_code: clean,
+    });
+
+    if (!oneArg.error) return oneArg;
+
+    // Both failed — throw the more useful error (usually the 2-arg one)
+    throw twoArg.error || oneArg.error;
   }, []);
 
   // ✅ Admin status: try groups table first; fall back to group_members
@@ -1192,6 +1215,7 @@ export default function FleetScreen() {
     // ✅ Prevent boot from running multiple times (causes re-render loops)
     if (initialBootDoneRef.current) {
       console.log("Boot already done, skipping");
+      if (isMountedRef.current) setLoading(false); // ✅ prevents "loading forever"
       return;
     }
     initialBootDoneRef.current = true;
@@ -1199,16 +1223,22 @@ export default function FleetScreen() {
     setLoading(true);
 
     try {
-      // ✅ First, ensure user has both Work and Family fleets (timeout: 8s)
-      let fleets = null;
-      try {
-        fleets = await Promise.race([
-          ensureUserFleets(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
-        ]);
-      } catch (e) {
-        console.log("ensureUserFleets timed out or failed:", e?.message || e);
+      // ✅ Don't boot fleets if not signed in (prevents RPC stalls mid-auth)
+      const { data: sessionRes } = await supabase.auth.getSession();
+      const session = sessionRes?.session;
+      if (!session?.user?.id) {
+        console.log("boot: no session, skipping fleet boot");
+        if (isMountedRef.current) {
+          setLoading(false);
+          setFleetsLoading(false);
+          setErrorText("");
+        }
+        return;
       }
+
+      // ✅ First, ensure user has both Work and Family fleets
+      // Timeout + session guard are handled inside ensureUserFleets() itself.
+      const fleets = await ensureUserFleets();
 
       // Default to Family fleet on initial load (user can switch via tabs)
       let gidToUse = null;
@@ -1329,14 +1359,18 @@ export default function FleetScreen() {
           setIsAdmin(false);
           setOwnedFleets({ work: { groupId: null, inviteCode: null }, family: { groupId: null, inviteCode: null } });
           setActiveTab("family");
+          setLoading(false);       // ✅ Prevent "loading forever" if screen stays mounted
+          setFleetsLoading(false); // ✅ Clear fleet loading state
         }
         // ✅ Reset boot flag so boot can run again after sign-in
         initialBootDoneRef.current = false;
+        permissionsRequestedRef.current = false; // ✅ Allow re-request on next login
         return;
       }
 
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+      if (event === "SIGNED_IN") {
         // ✅ Reset boot flag to allow fresh boot on sign-in
+        // NOTE: TOKEN_REFRESHED deliberately excluded — it caused boot storms
         initialBootDoneRef.current = false;
         boot();
       }
@@ -1611,9 +1645,11 @@ export default function FleetScreen() {
         }
       } else {
         // 2) Join fleet via RPC (requires subscription for external fleets)
-        const { data: joinData, error: joinErr } = await supabase.rpc(RPC_JOIN_GROUP, {
-          p_invite_code: clean,
-          p_fleet_type: switchFleetType, // ✅ source of truth for the join intent
+        // Guard: ensure fleetType is always "work" or "family" (never null/undefined)
+        const ft = switchFleetType === "work" ? "work" : "family";
+        const { data: joinData, error: joinErr } = await joinFleetByInviteCode({
+          inviteCode: clean,
+          fleetType: ft,
         });
         if (joinErr) throw joinErr;
 
@@ -1724,65 +1760,18 @@ export default function FleetScreen() {
     const d = String(deviceId || "").trim();
     if (!d) throw new Error("Invalid device id.");
 
-    const flag = hard === true;
+    const { data, error } = await supabase.rpc(RPC_REMOVE_DEVICE, {
+      device_id: d,
+      purge: hard === true,
+    });
 
-    // Try multiple common arg-name shapes so you don't get blocked by naming differences
-    const attempts = [
-      { p_device_id: d, p_full_wipe: flag },
-      { p_device_id: d, p_purge: flag },
-      { p_device_id: d, p_delete_history: flag },
-      { p_device_id: d, p_delete: flag },
-      { p_device_id: d, p_remove: flag },
+    if (error) throw error;
 
-      { device_id: d, full_wipe: flag },
-      { device_id: d, purge: flag },
-      { device_id: d, delete_history: flag },
-      { device_id: d, delete: flag },
-      { device_id: d, remove: flag },
-
-      // In case boolean is optional / has a default
-      { p_device_id: d },
-      { device_id: d },
-    ];
-
-    let lastErr = null;
-
-    for (const payload of attempts) {
-      const { data, error } = await supabase.rpc(RPC_REMOVE_DEVICE, payload);
-
-      if (!error) {
-        // Some RPCs return void; some return {ok:true}
-        if (data && typeof data === "object" && data.ok === false) {
-          throw new Error(data.error || "Remove failed.");
-        }
-        return data ?? { ok: true };
-      }
-
-      lastErr = error;
-
-      // If it's a "missing function/arg" style error, keep trying other payloads
-      const msg = String(error?.message || "");
-      const lower = msg.toLowerCase();
-
-      const isParamMismatch =
-        lower.includes("function") ||
-        lower.includes("does not exist") ||
-        lower.includes("parameter") ||
-        lower.includes("unknown") ||
-        lower.includes("pgrst") ||
-        lower.includes("schema cache");
-
-      if (isParamMismatch) continue;
-
-      // If it's permission/auth-related, stop early
-      if (lower.includes("not authenticated") || lower.includes("not authorized") || lower.includes("permission")) {
-        throw error;
-      }
-
-      // otherwise continue one more try, but keep the error
+    if (data && typeof data === "object" && data.ok === false) {
+      throw new Error(data.error || "Remove failed.");
     }
 
-    throw lastErr || new Error("Remove failed.");
+    return data ?? { ok: true };
   };
 
   const openMemberMenu = async (item) => {
