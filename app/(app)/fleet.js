@@ -363,20 +363,22 @@ export default function FleetScreen() {
     try {
       setInviteLoading(true);
 
-      const gid = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
-      const cachedCode = await AsyncStorage.getItem(STORAGE_KEY_INVITE_CODE);
+      // DON'T trust AsyncStorage for authoritative group_id.
+      // Resolve the current group from the device row in the DB.
+      const gidStr = await reconcileGroupFromDeviceRow();
 
-      const gidStr = gid ? String(gid) : null;
       if (gidStr) activeGroupIdRef.current = gidStr; // ✅ Track active group
       if (isMountedRef.current) setGroupId(gidStr);
 
+      // Invite code may have been stored by reconcileGroupFromDeviceRow; if not, fetch it
+      const cachedCode = await AsyncStorage.getItem(STORAGE_KEY_INVITE_CODE);
       if (cachedCode) {
         if (isMountedRef.current) setInviteCode(String(cachedCode));
       } else if (gidStr) {
         const code = await fetchInviteCodeForGroup(gidStr);
         if (code) {
           if (isMountedRef.current) setInviteCode(String(code));
-          await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, String(code));
+          try { await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, String(code)); } catch {}
         }
       }
 
@@ -387,7 +389,7 @@ export default function FleetScreen() {
     } finally {
       if (isMountedRef.current) setInviteLoading(false);
     }
-  }, [fetchInviteCodeForGroup]);
+  }, [fetchInviteCodeForGroup, reconcileGroupFromDeviceRow]);
 
   // ✅ Ensure user has both Work and Family fleets (auto-create on first load)
   const ensureUserFleets = useCallback(async () => {
@@ -1001,8 +1003,7 @@ export default function FleetScreen() {
   fetchFleetRef.current = fetchFleet;
 
   // ✅ Handle tab switch between user's OWN fleets (Work/Family)
-  // ✅ FIX #2: Only switches UI view, doesn't move device binding
-  // Device stays where it's bound; user just sees different fleet members
+  // On tab switch we MUST move the device binding in the DB so UI and device stay in sync.
   const handleTabSwitch = useCallback(async (tab) => {
     if (tab === selectedFleetType) return;
 
@@ -1013,50 +1014,98 @@ export default function FleetScreen() {
       return;
     }
 
-    // 1️⃣ PERSIST which tab user selected
+    const prevGroupId = groupId ? String(groupId) : null;
+    console.log("Switch requested:", tab, "->", newGid?.slice(0, 8));
+
+    // Prevent concurrent switches
+    if (switching) return;
     try {
-      await AsyncStorage.setItem(STORAGE_KEY_SELECTED_FLEET, tab);
-    } catch (e) {
-      console.log("Tab storage error:", e?.message);
-    }
+      setSwitching(true);
 
-    // 2️⃣ Update UI state to reflect new selection
-    if (isMountedRef.current) {
-      setSelectedFleetType(tab);
-      setActiveTab(tab);
-      setGroupId(newGid);
-      setInviteCode("");
-      setInviteLoading(true);
-      setWorkers([]);
-      setNameByDevice({});
-      setRecentCheckIns([]);
-      setIncomingSos(null);
-    }
+      // 1️⃣ Resolve: if the user already owns the fleet we still need to move the device binding
+      // 2️⃣ CRITICAL: move device row to the new fleet in the DB
+      const hs = await handshakeDevice({ groupId: newGid });
+      if (!hs?.ok) throw new Error(hs?.error || "Could not move device to the new fleet.");
 
-    // 3️⃣ Set active group ref FIRST to prevent stale subscription callbacks
-    activeGroupIdRef.current = newGid;
+      // 3️⃣ Persist selected fleet type and chosen group id AFTER successful handshake
+      try {
+        await AsyncStorage.setItem(STORAGE_KEY_SELECTED_FLEET, tab);
+        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, newGid);
+        await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
+      } catch (e) {
+        console.log("Tab storage warning:", e?.message || e);
+      }
 
-    // 4️⃣ Fetch new fleet data
-    if (fetchFleetRef.current) {
-      fetchFleetRef.current(newGid);
-    }
+      // 4️⃣ Update UI state to reflect new selection
+      if (isMountedRef.current) {
+        setSelectedFleetType(tab);
+        setActiveTab(tab);
+        setGroupId(newGid);
+        setInviteCode("");
+        setInviteLoading(true);
+        setWorkers([]);
+        setNameByDevice({});
+        setRecentCheckIns([]);
+        setIncomingSos(null);
+      }
 
-    // 5️⃣ Fetch invite code if not cached
-    const fleet = ownedFleets[tab];
-    const cachedCode = fleet?.inviteCode;
-    if (!cachedCode && newGid) {
-      const fetched = await fetchInviteCodeForGroup(newGid);
-      if (fetched && isMountedRef.current) {
-        setInviteCode(String(fetched));
+      // 5️⃣ Set active group ref FIRST to prevent stale subscription callbacks
+      activeGroupIdRef.current = newGid;
+
+      // 6️⃣ Fetch new fleet data
+      if (fetchFleetRef.current) {
+        await fetchFleetRef.current(newGid);
+      }
+
+      // 7️⃣ Fetch invite code if not cached
+      const fleet = ownedFleets[tab];
+      const cachedCode = fleet?.inviteCode;
+      if (!cachedCode && newGid) {
+        const fetched = await fetchInviteCodeForGroup(newGid);
+        if (fetched && isMountedRef.current) {
+          setInviteCode(String(fetched));
+          setInviteLoading(false);
+        }
+      } else if (cachedCode && isMountedRef.current) {
+        setInviteCode(String(cachedCode));
         setInviteLoading(false);
       }
-    } else if (cachedCode && isMountedRef.current) {
-      setInviteCode(String(cachedCode));
-      setInviteLoading(false);
-    }
 
-    console.log("✅ Switched to", tab, "fleet:", newGid?.slice(0, 8), "(UI view only, device binding unchanged)");
-  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup]);
+      // 8️⃣ Rebind tracker caches + force GPS sync to new fleet
+      try { await rebindTrackerToLatestFleet("tab_switch"); } catch {}
+
+      console.log("✅ Device moved to target group and UI refreshed:", newGid?.slice(0,8));
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.log("Tab switch failed:", msg);
+
+      // Restore previous context
+      activeGroupIdRef.current = prevGroupId;
+      try {
+        if (prevGroupId) {
+          await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, prevGroupId);
+        } else {
+          await AsyncStorage.removeItem(STORAGE_KEY_GROUP_ID);
+        }
+      } catch {}
+
+      try {
+        // refresh view for previous group
+        await loadFleetContext();
+        await fetchFleet(prevGroupId || null);
+      } catch {}
+
+      if (isMountedRef.current) {
+        setGroupId(prevGroupId);
+        setWorkers([]);
+        setNameByDevice({});
+        setRecentCheckIns([]);
+        setIncomingSos(null);
+      }
+    } finally {
+      setSwitching(false);
+    }
+  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup, groupId, switching, loadFleetContext]);
 
   const sortedWorkers = useMemo(() => {
     const now = Date.now();
