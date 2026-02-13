@@ -171,7 +171,8 @@ async function cleanup() {
  */
 function subscribeToRealtimeChannel(groupId) {
   // MUST match the channel name used in BatSignal.js tryBroadcastSOS/tryBroadcastCancel
-  const channelName = `fleet:${groupId}`;
+  // ✅ FIX #1: Changed to sos: prefix to avoid collision with fleet_ui channel
+  const channelName = `sos:${groupId}`;
 
   // Build channel with ONLY broadcast listeners (no postgres_changes)
   const channel = supabase

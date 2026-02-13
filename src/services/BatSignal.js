@@ -134,11 +134,26 @@ async function getDisplayName() {
 }
 
 // ✅ Fetch ALL group_ids the user belongs to (member + owner)
+// ✅ FIX #4: With auth fallback to prevent empty list on cancel
 async function getAllMyGroupIdsSafe() {
   try {
+    // 1️⃣ Attempt to refresh session first if stale
+    try {
+      await supabase.auth.refreshSession();
+    } catch {}
+
     const { data: auth } = await supabase.auth.getUser();
     const userId = auth?.user?.id;
-    if (!userId) return [];
+    if (!userId) {
+      // 2️⃣ Fallback: read locally cached group IDs
+      console.log("Auth missing in SOS cancel, using cached group ID");
+      try {
+        const cachedGid = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+        return cachedGid ? [cachedGid] : [];
+      } catch {
+        return [];
+      }
+    }
 
     // Fetch groups where user is a member
     const { data: memberData } = await supabase
@@ -157,7 +172,14 @@ async function getAllMyGroupIdsSafe() {
 
     return Array.from(new Set([...memberIds, ...ownerIds]));
   } catch {
-    return [];
+    // 3️⃣ Final fallback: cached group ID
+    console.log("getAllMyGroupIdsSafe failed, falling back to cached group ID");
+    try {
+      const cachedGid = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+      return cachedGid ? [cachedGid] : [];
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -692,7 +714,8 @@ async function tryBroadcastSOS({ groupId, deviceId, displayName, link, lat, lng 
   if (!groupId) return false;
 
   try {
-    const ch = supabase.channel(`fleet:${groupId}`);
+    // ✅ FIX #1: Use sos: channel to match SOSAlertManager listener
+    const ch = supabase.channel(`sos:${groupId}`);
 
     const subscribed = await new Promise((resolve) => {
       let done = false;
@@ -755,7 +778,8 @@ async function tryBroadcastCancel({ groupId, deviceId, displayName }) {
   if (!groupId) return false;
 
   try {
-    const ch = supabase.channel(`fleet:${groupId}`);
+    // ✅ FIX #1: Use sos: channel to match SOSAlertManager listener
+    const ch = supabase.channel(`sos:${groupId}`);
 
     const subscribed = await new Promise((resolve) => {
       let done = false;

@@ -523,6 +523,8 @@ CREATE OR REPLACE FUNCTION public.upsert_tracking_session(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = 'public'
+SET row_security = 'off'
 AS $$
 DECLARE
   v_user_id UUID;

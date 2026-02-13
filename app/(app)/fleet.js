@@ -78,6 +78,7 @@ async function writePinHash(hash) {
 
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
 const STORAGE_KEY_INVITE_CODE = "sentinel_invite_code";
+const STORAGE_KEY_SELECTED_FLEET = "sentinel_selected_fleet_type"; // ✅ FIX #2: Track which tab user selected
 
 // ✅ RPCs
 const RPC_JOIN_GROUP = "join_group_with_invite_code";
@@ -176,6 +177,11 @@ export default function FleetScreen() {
     family: { groupId: null, inviteCode: null },
   });
   const [fleetsLoading, setFleetsLoading] = useState(true);
+
+  // ✅ FIX #2: Separate groupId storage so UI tab and groupId never mismatch
+  const [familyGroupId, setFamilyGroupId] = useState(null);
+  const [workGroupId, setWorkGroupId] = useState(null);
+  const [selectedFleetType, setSelectedFleetType] = useState("family"); // ✅ FIX #2: Persisted
 
   // Optional: show a quick banner when an SOS broadcast hits
   const [incomingSos, setIncomingSos] = useState(null);
@@ -995,110 +1001,62 @@ export default function FleetScreen() {
   fetchFleetRef.current = fetchFleet;
 
   // ✅ Handle tab switch between user's OWN fleets (Work/Family)
-  // Device MOVES to the selected fleet so user always sees their own device in the active tab.
+  // ✅ FIX #2: Only switches UI view, doesn't move device binding
+  // Device stays where it's bound; user just sees different fleet members
   const handleTabSwitch = useCallback(async (tab) => {
-    if (tab === activeTab) return;
+    if (tab === selectedFleetType) return;
 
-    const fleet = ownedFleets[tab];
-    if (!fleet?.groupId) {
+    // Determine the groupId for the selected fleet type
+    const newGid = tab === "work" ? workGroupId : familyGroupId;
+    if (!newGid) {
       console.log("Tab switch: No fleet found for tab", tab);
       return;
     }
 
-    // Remember previous state so we can revert on handshake failure
-    const prevTab = activeTab;
-    const prevGroupId = activeGroupIdRef.current;
+    // 1️⃣ PERSIST which tab user selected
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY_SELECTED_FLEET, tab);
+    } catch (e) {
+      console.log("Tab storage error:", e?.message);
+    }
 
-    // ✅ Set active group ref FIRST to prevent stale subscription callbacks
-    activeGroupIdRef.current = fleet.groupId;
-
-    // Update tab state
-    setActiveTab(tab);
-    setSwitchFleetType(tab);
-
-    const cachedCode = fleet.inviteCode || "";
+    // 2️⃣ Update UI state to reflect new selection
     if (isMountedRef.current) {
-      setGroupId(fleet.groupId);
-      setInviteCode(cachedCode);
-      setInviteLoading(!cachedCode);
+      setSelectedFleetType(tab);
+      setActiveTab(tab);
+      setGroupId(newGid);
+      setInviteCode("");
+      setInviteLoading(true);
       setWorkers([]);
       setNameByDevice({});
       setRecentCheckIns([]);
       setIncomingSos(null);
     }
 
-    // ✅ Move device tracking to the selected fleet so the user's own device appears here
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, fleet.groupId);
-      await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
-      if (cachedCode) {
-        await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, cachedCode);
-      }
-    } catch (e) {
-      console.log("Tab switch AsyncStorage error:", e?.message || e);
+    // 3️⃣ Set active group ref FIRST to prevent stale subscription callbacks
+    activeGroupIdRef.current = newGid;
+
+    // 4️⃣ Fetch new fleet data
+    if (fetchFleetRef.current) {
+      fetchFleetRef.current(newGid);
     }
 
-    // ✅ Bug 1 fix: Pass saved display name so it doesn't revert to 'Device'
-    // ✅ Bug 2 fix: If handshake fails, revert to previous fleet
-    let hsResult = null;
-    try {
-      let savedName = null;
-      try {
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
-        const uid = currentUser?.id;
-        if (uid) {
-          savedName = await AsyncStorage.getItem(`sentinel_device_display_name:${uid}`);
-        }
-      } catch {}
-      hsResult = await handshakeDevice({ groupId: fleet.groupId, displayName: savedName || undefined });
-    } catch (e) {
-      console.log("Tab switch handshake error:", e?.message || e);
-      hsResult = { ok: false, error: e?.message || String(e) };
-    }
-
-    if (!hsResult?.ok) {
-      console.log("🚨 Tab switch handshake failed, reverting to previous fleet:", hsResult?.error);
-      // Revert UI + storage to previous fleet
-      activeGroupIdRef.current = prevGroupId;
-      if (isMountedRef.current) {
-        setActiveTab(prevTab);
-        setSwitchFleetType(prevTab);
-        if (prevGroupId) setGroupId(prevGroupId);
-      }
-      try {
-        if (prevGroupId) await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, prevGroupId);
-      } catch {}
-      Alert.alert("Fleet Switch Failed", hsResult?.error || "Could not switch fleet. Please try again.");
-      // Still fetch previous fleet to restore UI
-      if (prevGroupId) await fetchFleet(prevGroupId);
-      return;
-    }
-
-    // ✅ Rebind tracker caches + force GPS sync (best-effort, may fail without GPS)
-    try {
-      await rebindTrackerToLatestFleet(`tab_switch_${tab}`);
-    } catch (e) {
-      console.log("Tab switch rebind error:", e?.message || e);
-    }
-
-    // Fetch members for this fleet
-    await fetchFleet(fleet.groupId);
-
-    // ✅ If invite code wasn't in the ownedFleets cache, fetch it now
-    if (!cachedCode && fleet.groupId) {
-      const fetched = await fetchInviteCodeForGroup(fleet.groupId);
+    // 5️⃣ Fetch invite code if not cached
+    const fleet = ownedFleets[tab];
+    const cachedCode = fleet?.inviteCode;
+    if (!cachedCode && newGid) {
+      const fetched = await fetchInviteCodeForGroup(newGid);
       if (fetched && isMountedRef.current) {
         setInviteCode(String(fetched));
-        setOwnedFleets((prev) => ({
-          ...prev,
-          [tab]: { ...prev[tab], inviteCode: String(fetched) },
-        }));
+        setInviteLoading(false);
       }
-      if (isMountedRef.current) setInviteLoading(false);
+    } else if (cachedCode && isMountedRef.current) {
+      setInviteCode(String(cachedCode));
+      setInviteLoading(false);
     }
 
-    console.log("✅ Switched to", tab, "fleet:", fleet.groupId?.slice(0, 8));
-  }, [activeTab, ownedFleets, fetchFleet, fetchInviteCodeForGroup]);
+    console.log("✅ Switched to", tab, "fleet:", newGid?.slice(0, 8), "(UI view only, device binding unchanged)");
+  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup]);
 
   const sortedWorkers = useMemo(() => {
     const now = Date.now();
@@ -1248,37 +1206,45 @@ export default function FleetScreen() {
       let gidToUse = null;
       let codeToUse = null;
 
-      // ✅ Fix #2: Always reconcile from device row first (source of truth for tracking).
-      // ensureUserFleets is for VIEW only — don't write to AsyncStorage from it.
-      let reconciledGid = null;
-      try {
-        reconciledGid = await Promise.race([
-          reconcileGroupFromDeviceRow(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
-        ]);
-      } catch (e) {
-        console.log("reconcileGroup timed out or failed:", e?.message || e);
+      // ✅ FIX #2: Load BOTH fleets and respect user's last selected fleet type
+      // Store both IDs separately so tab can switch without device binding issues
+      if (fleets?.family?.groupId) {
+        setFamilyGroupId(fleets.family.groupId);
+      }
+      if (fleets?.work?.groupId) {
+        setWorkGroupId(fleets.work.groupId);
       }
 
-      if (reconciledGid) {
-        // Device row is the source of truth for tracking
-        gidToUse = reconciledGid;
+      // Load saved fleet selection or default to family
+      let savedFleetType = await AsyncStorage.getItem(STORAGE_KEY_SELECTED_FLEET);
+      if (!savedFleetType || (savedFleetType !== "work" && savedFleetType !== "family")) {
+        savedFleetType = "family";
+      }
+
+      // Determine which groupId to use based on selected fleet type
+      const gidForType = savedFleetType === "work" ? fleets?.work?.groupId : fleets?.family?.groupId;
+      
+      if (gidForType) {
+        gidToUse = gidForType;
+        codeToUse = savedFleetType === "work" ? fleets?.work?.inviteCode : fleets?.family?.inviteCode;
         activeGroupIdRef.current = gidToUse;
-        // Pull invite code from ownedFleets cache if available
-        codeToUse = fleets?.family?.inviteCode || fleets?.work?.inviteCode || null;
-      } else if (fleets) {
-        // No device row yet — use ensured fleet for VIEW only (don't stomp storage)
-        const defaultFleet = fleets.family || fleets.work;
-        if (defaultFleet?.groupId) {
-          gidToUse = defaultFleet.groupId;
-          codeToUse = defaultFleet.inviteCode;
-          activeGroupIdRef.current = gidToUse;
+        if (isMountedRef.current) {
+          setSelectedFleetType(savedFleetType);
+          setActiveTab(savedFleetType);
         }
       } else {
-        // Fall back to cached context
-        const cachedGid = await loadFleetContext();
-        gidToUse = cachedGid;
-        if (gidToUse) activeGroupIdRef.current = gidToUse;
+        // Fallback to first available fleet if saved type is not available
+        const fallbackFleet = fleets?.family || fleets?.work;
+        if (fallbackFleet?.groupId) {
+          gidToUse = fallbackFleet.groupId;
+          codeToUse = fallbackFleet.inviteCode;
+          activeGroupIdRef.current = gidToUse;
+          const fbType = fleets?.family?.groupId === gidToUse ? "family" : "work";
+          if (isMountedRef.current) {
+            setSelectedFleetType(fbType);
+            setActiveTab(fbType);
+          }
+        }
       }
 
       // ✅ Bug 6 fix: Persist resolved groupId so deviceHandshake.js can read it on restart
@@ -1462,7 +1428,7 @@ export default function FleetScreen() {
     const subscribedGroup = groupId; // ✅ Fix #6: capture in closure to avoid stale ref
 
     const ch = supabase
-      .channel(`fleet:${groupId}`)
+      .channel(`fleet_ui:${groupId}`)
       .on("broadcast", { event: "sos" }, (payload) => {
         // ✅ Check if this broadcast is still for the active group
         if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) {
