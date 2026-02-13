@@ -113,5 +113,27 @@ execute function public.send_sos_push_notifications_direct();
 -- ============================================
 -- GRANT: Allow the function to use pg_net
 -- ============================================
-grant usage on schema net to postgres;
-grant execute on function net.http_post(text, jsonb, jsonb, integer) to postgres;
+-- Guard grants: only apply if pg_net's objects exist
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'net') THEN
+    BEGIN
+      EXECUTE 'grant usage on schema net to postgres';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Could not grant usage on schema net: %', SQLERRM;
+    END;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    WHERE n.nspname = 'net' AND p.proname = 'http_post'
+  ) THEN
+    BEGIN
+      EXECUTE 'grant execute on function net.http_post(text, jsonb, jsonb, integer) to postgres';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Could not grant execute on net.http_post: %', SQLERRM;
+    END;
+  END IF;
+END
+$$;
