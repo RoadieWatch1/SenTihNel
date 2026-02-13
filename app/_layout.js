@@ -59,14 +59,8 @@ function AuthGate() {
     };
 
     const stopRefreshAndClearAuth = async () => {
-      globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
-
       try {
-        supabase.auth.stopAutoRefresh();
-      } catch {}
-
-      // ✅ MUST match storageKey in supabase.js EXACTLY
-      try {
+        // ✅ MUST match storageKey in supabase.js EXACTLY
         await AsyncStorage.removeItem("sentihnel.auth");
       } catch {}
 
@@ -93,21 +87,24 @@ function AuthGate() {
 
     const getGroupIdFromDb = async (userId) => {
       if (!userId) return null;
+
       try {
-        const { data, error } = await supabase
+        const req = supabase
           .from("group_members")
           .select("group_id")
           .eq("user_id", userId)
-          .limit(1);
+          .limit(1)
+          .maybeSingle();
+
+        const { data, error } = await Promise.race([
+          req,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("timeout")), 4000)
+          ),
+        ]);
 
         if (error) return null;
-
-        const gid =
-          Array.isArray(data) && data.length > 0 && data[0]?.group_id
-            ? String(data[0].group_id)
-            : null;
-
-        return gid;
+        return data?.group_id ? String(data.group_id) : null;
       } catch {
         return null;
       }
@@ -169,7 +166,10 @@ function AuthGate() {
 
         const res = await handshakeDevice({ groupId });
         if (!res?.ok) {
-          console.log("🟡 AuthGate handshake warning:", res?.error || "Unknown error");
+          console.log(
+            "🟡 AuthGate handshake warning:",
+            res?.error || "Unknown error"
+          );
         } else {
           console.log("✅ AuthGate handshake OK:", res.deviceId);
         }
@@ -194,10 +194,6 @@ function AuthGate() {
           return;
         }
 
-        // ✅ Enable refresh behavior ONLY AFTER session is confirmed valid
-        globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = true;
-        supabase.auth.startAutoRefresh();
-
         // ✅ Logged in -> must have fleet before entering app
         const { hasFleet, groupId } = await ensureFleetOrSetup(session);
 
@@ -206,24 +202,34 @@ function AuthGate() {
           return;
         }
 
-        // ✅ Handshake on boot
-        await maybeHandshake(session, groupId);
-
-        // ✅ Cleanup orphaned devices from previous installs (marks old device_ids OFFLINE)
-        try {
-          const currentDeviceId = await AsyncStorage.getItem("sentinel_device_id");
-          if (currentDeviceId && session?.user?.id) {
-            supabase.rpc("cleanup_orphaned_devices", {
-              p_user_id: session.user.id,
-              p_current_device_id: currentDeviceId,
-            }).then(({ data }) => {
-              if (data > 0) console.log(`✅ Cleaned up ${data} orphaned device(s) from previous installs`);
-            }).catch(() => {});
-          }
-        } catch {}
-
-        // ✅ Logged in + has fleet -> must be in app
+        // ✅ Route FIRST (never block boot on handshake)
         if (!inAppGroup) safeReplace("/(app)/fleet");
+
+        // ✅ Fire-and-forget handshake (do not await)
+        maybeHandshake(session, groupId);
+
+        // ✅ Fire-and-forget orphan cleanup
+        (async () => {
+          try {
+            const currentDeviceId = await AsyncStorage.getItem("sentinel_device_id");
+            if (currentDeviceId && session?.user?.id) {
+              supabase
+                .rpc("cleanup_orphaned_devices", {
+                  p_user_id: session.user.id,
+                  p_current_device_id: currentDeviceId,
+                })
+                .then(({ data }) => {
+                  if (data > 0) {
+                    console.log(
+                      `✅ Cleaned up ${data} orphaned device(s) from previous installs`
+                    );
+                  }
+                })
+                .catch(() => {});
+            }
+          } catch {}
+        })();
+
         return;
       } catch (e) {
         safeReplace("/(auth)/auth");
@@ -235,33 +241,10 @@ function AuthGate() {
     // Run on boot + when route group changes
     routeFromSession();
 
-    // Listen for sign-ins/sign-outs (authoritative)
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (!session) {
-          globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
-          try { supabase.auth.stopAutoRefresh(); } catch {}
-          try { await clearSensitiveStorage(); } catch {}
-          resetGateState();
-          safeReplace("/(auth)/auth");
-          return;
-        }
-
-        globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = true;
-        supabase.auth.startAutoRefresh();
-
-        const { hasFleet, groupId } = await ensureFleetOrSetup(session);
-
-        if (!hasFleet) {
-          safeReplace("/(auth)/auth?setup=1");
-          return;
-        }
-
-        await maybeHandshake(session, groupId);
-
-        safeReplace("/(app)/fleet");
-      }
-    );
+    // Listen for sign-ins/sign-outs (authoritative) — just re-run routing
+    const { data: authListener } = supabase.auth.onAuthStateChange(async () => {
+      routeFromSession();
+    });
 
     return () => {
       isMounted = false;

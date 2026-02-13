@@ -1224,21 +1224,25 @@ export default function FleetScreen() {
 
     try {
       // ✅ Don't boot fleets if not signed in (prevents RPC stalls mid-auth)
-      const { data: sessionRes } = await supabase.auth.getSession();
-      const session = sessionRes?.session;
-      if (!session?.user?.id) {
-        console.log("boot: no session, skipping fleet boot");
+      const { data: sessionRes, error: sessionErr } = await supabase.auth.getSession();
+
+      if (sessionErr || !sessionRes?.session?.user?.id) {
+        console.log("boot: session not ready, aborting boot");
         if (isMountedRef.current) {
           setLoading(false);
           setFleetsLoading(false);
-          setErrorText("");
         }
         return;
       }
 
       // ✅ First, ensure user has both Work and Family fleets
       // Timeout + session guard are handled inside ensureUserFleets() itself.
-      const fleets = await ensureUserFleets();
+      let fleets = null;
+      try {
+        fleets = await ensureUserFleets();
+      } catch (e) {
+        console.log("boot: ensureUserFleets failed safely:", e?.message);
+      }
 
       // Default to Family fleet on initial load (user can switch via tabs)
       let gidToUse = null;
