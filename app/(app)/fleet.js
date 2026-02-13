@@ -943,9 +943,12 @@ export default function FleetScreen() {
         }
 
         const rows = Array.isArray(data) ? data : [];
+        console.log("📦 tracking_sessions rows:", rows.length, "gid:", String(gid).slice(0, 8));
         const deduped = dedupeLatestByDevice(rows);
 
-        // ✅ FIX: Filter out inactive devices (deleted app, logged out, switched fleet, or reinstalled)
+        // ✅ Optional: Filter out inactive devices (ONLY when we can actually see device rows under RLS)
+        // If RLS hides devices for other members, this query can return [] with NO error.
+        // In that case, DO NOT filter, or you'll hide the entire fleet.
         let filtered = deduped;
         try {
           const dIds = deduped.map((r) => r?.device_id).filter(Boolean);
@@ -957,11 +960,16 @@ export default function FleetScreen() {
               .eq("is_active", true)
               .in("device_id", dIds);
 
-            // Always apply filter when query succeeded (even if 0 active devices)
-            // Only skip filter on query error (fallback to showing all)
-            if (!activeErr && activeDevices) {
-              const activeSet = new Set(activeDevices.map((d) => d.device_id));
-              filtered = deduped.filter((r) => activeSet.has(r.device_id));
+            if (activeErr) {
+              console.log("is_active filter skipped (devices RLS likely):", activeErr.message);
+              filtered = deduped; // fallback
+            } else if (Array.isArray(activeDevices) && activeDevices.length > 0) {
+              const activeSet = new Set(activeDevices.map((d) => String(d.device_id)));
+              filtered = deduped.filter((r) => activeSet.has(String(r.device_id)));
+            } else {
+              // ⚠️ Key fix: don't wipe the list if devices returned 0 rows.
+              // It usually means RLS hid other members' devices.
+              filtered = deduped;
             }
           }
         } catch (e) {
