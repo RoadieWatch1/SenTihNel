@@ -209,8 +209,35 @@ export async function handshakeDevice(opts = {}) {
       await AsyncStorage.setItem(STORAGE_KEY_DEVICE_ID, deviceId);
 
       // 3) Resolve group_id (required)
-      let groupId = groupIdOverride || (await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID));
-      groupId = String(groupId || "").trim();
+      // DO NOT trust AsyncStorage as authoritative. Prefer explicit override,
+      // then resolve the current group_id from the devices table for this device.
+      let groupId = groupIdOverride || null;
+
+      if (!groupId) {
+        try {
+          const { data: deviceRow, error: devErr } = await supabase
+            .from("devices")
+            .select("group_id")
+            .eq("device_id", deviceId)
+            .limit(1)
+            .maybeSingle();
+
+          if (!devErr && deviceRow && deviceRow.group_id) {
+            groupId = String(deviceRow.group_id).trim();
+          }
+        } catch (e) {
+          // ignore and fallthrough to AsyncStorage fallback below
+          console.log("handshakeDevice: could not read devices table for group_id:", e?.message || e);
+        }
+      }
+
+      // Fallback: last resort, read AsyncStorage (kept for compatibility)
+      if (!groupId) {
+        try {
+          const stored = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+          if (stored) groupId = String(stored).trim();
+        } catch {}
+      }
 
       if (!groupId) {
         return { ok: false, error: "Missing groupId (sentinel_group_id)", deviceId };
@@ -222,7 +249,7 @@ export async function handshakeDevice(opts = {}) {
 
       // If override provided, keep storage in sync to prevent stale fleet reuse
       if (groupIdOverride && String(groupIdOverride).trim()) {
-        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, String(groupIdOverride).trim());
+        try { await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, String(groupIdOverride).trim()); } catch {}
       }
 
       // 4) ✅ Verify membership (prevents accidental use of stale groupId)
@@ -341,7 +368,11 @@ export async function handshakeDevice(opts = {}) {
           // Do NOT fail here (some RPCs may not return it correctly), but we never adopt it.
         }
 
-        // ✅ ALWAYS return the canonical local deviceId/groupId
+        // Persist authoritative group_id locally (best-effort) and return success
+        try {
+          await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, String(groupId));
+        } catch {}
+
         return {
           ok: true,
           deviceId,
