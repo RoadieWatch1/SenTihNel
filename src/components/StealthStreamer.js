@@ -27,28 +27,46 @@ async function fetchAgoraTokenViaInvoke({ deviceId, uid = 0, role = "publisher",
   if (sessionErr) throw new Error(`Auth session error: ${sessionErr.message}`);
   if (!sessionData?.session?.access_token) throw new Error("Auth session missing (no access_token)");
 
-  // Invoke edge function (supabase-js attaches Authorization automatically)
-  const { data, error } = await supabase.functions.invoke("agora-token", {
-    body: {
-      device_id: deviceId,
-      uid,
-      role,
-      expire,
-    },
-  });
+  try {
+    // Invoke edge function (supabase-js attaches Authorization automatically)
+    const { data, error } = await supabase.functions.invoke("agora-token", {
+      body: {
+        device_id: deviceId,
+        uid,
+        role,
+        expire,
+      },
+    });
 
-  if (error) {
-    const msg = error.message || "Edge function invoke failed";
-    console.error("❌ Agora invoke failed (full):", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    throw new Error(msg);
+    if (error) {
+      console.error("❌ Agora invoke error:", error);
+      // Decode gateway/function response body if available
+      if (error?.context?.response) {
+        try {
+          const txt = await error.context.response.text();
+          console.error("❌ Agora invoke response text:", txt);
+        } catch {}
+      }
+      throw error;
+    }
+
+    // Expected: { token, app_id, channel, uid, expires_in }
+    if (!data?.token || !data?.app_id) {
+      throw new Error(`Invalid token response from edge function: ${JSON.stringify(data)}`);
+    }
+
+    return data;
+  } catch (e) {
+    console.error("❌ Agora invoke failed (raw):", e);
+    // If the thrown error has a response attached (FunctionsHttpError), read it
+    if (e?.context?.response) {
+      try {
+        const txt = await e.context.response.text();
+        console.error("❌ Agora invoke response text:", txt);
+      } catch {}
+    }
+    throw e;
   }
-
-  // Expected: { token, app_id, channel, uid, expires_in }
-  if (!data?.token || !data?.app_id) {
-    throw new Error(`Invalid token response from edge function: ${JSON.stringify(data)}`);
-  }
-
-  return data;
 }
 
 /**
