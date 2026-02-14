@@ -22,10 +22,12 @@ function CustomDrawerContent(props) {
   const router = useRouter();
 
   const handleLogout = async () => {
+    // 1) Stop alarm immediately (no network needed)
+    try { AlarmService.stopAlarm(); } catch {}
+
     const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
 
-    // ✅ All cleanup + DB deactivation runs in PARALLEL with a single 2s hard cap.
-    // Previously this was sequential (5s + 3s = 8s worst case) — users saw "loading timed out".
+    // 2) All cleanup + DB deactivation runs in PARALLEL with a single 2s hard cap.
     try {
       await Promise.race([
         Promise.allSettled([
@@ -45,10 +47,33 @@ function CustomDrawerContent(props) {
       ]);
     } catch {}
 
-    // ✅ Sign out + redirect immediately (never blocked by cleanup above)
+    // 3) Clear local cached fleet context NOW (prevents cross-account bleed on re-login)
+    try {
+      await AsyncStorage.multiRemove([
+        "sentinel_group_id",
+        "sentinel_invite_code",
+        "sentinel_selected_fleet_type",
+      ]);
+    } catch {}
+
+    // 4) Kill realtime channels (prevents them keeping auth "alive")
+    try { supabase.removeAllChannels(); } catch {}
+
+    // 5) Sign out (force local — instant, no network needed)
     globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
     try { supabase.auth.stopAutoRefresh(); } catch {}
-    try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+    try {
+      await Promise.race([
+        supabase.auth.signOut({ scope: "local" }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("signOut timeout")), 6000)),
+      ]);
+    } catch (e) {
+      console.log("signOut non-fatal:", e?.message || e);
+      // worst-case fallback
+      try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+    }
+
+    // 6) Route away no matter what
     try { router.replace("/(auth)/auth"); } catch {}
   };
 
