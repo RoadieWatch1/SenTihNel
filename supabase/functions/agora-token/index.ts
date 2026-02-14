@@ -67,6 +67,12 @@ serve(async (req: Request) => {
   // ── Auth: verify JWT ────────────────────────────────────
   const authHeader = req.headers.get("Authorization") ?? "";
   const jwt = authHeader.replace("Bearer ", "").trim();
+
+  console.log("AGORA_TOKEN: authHeader?", {
+    hasAuthHeader: !!req.headers.get("Authorization"),
+    authPrefix: (req.headers.get("Authorization") ?? "").slice(0, 18),
+  });
+
   if (!jwt) {
     return json({ error: "Missing authorization" }, 401);
   }
@@ -85,6 +91,7 @@ serve(async (req: Request) => {
 
     // ── Parse body ──────────────────────────────────────
     const body = await req.json().catch(() => ({}));
+    console.log("AGORA_TOKEN: body", body);
     const deviceId =
       typeof body.device_id === "string" ? body.device_id.trim() : "";
     const uid = typeof body.uid === "number" ? body.uid : 0;
@@ -116,6 +123,13 @@ serve(async (req: Request) => {
       .select("id", { count: "exact", head: true })
       .eq("group_id", device.group_id)
       .eq("user_id", user.id);
+
+    console.log("AGORA_TOKEN: membership", {
+      userId: user.id,
+      deviceId: device.device_id,
+      groupId: device.group_id,
+      memberCount,
+    });
 
     if ((memberCount ?? 0) === 0) {
       return json({ error: "Not authorized for this device's fleet" }, 403);

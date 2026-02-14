@@ -4,7 +4,7 @@ import { View, Text, PermissionsAndroid, Platform, StyleSheet } from "react-nati
 import * as Location from "expo-location";
 import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 
 // Agora APP_ID is fetched from the token server at runtime.
 // No fallback — token server is required for secure channel access.
@@ -21,53 +21,34 @@ function stableUidFromDeviceId(deviceId) {
   return (h % 0x7FFFFFFE) + 1;
 }
 
-async function fetchAgoraToken(channelId, role = "publisher", uid = 0) {
-  // ✅ Refresh session first to ensure JWT is valid (especially after background/foreground)
-  const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
-  const jwt = refreshedSession?.access_token;
+async function fetchAgoraTokenViaInvoke({ deviceId, uid = 0, role = "publisher", expire = 3600 }) {
+  // Make sure the client actually has a session
+  const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+  if (sessionErr) throw new Error(`Auth session error: ${sessionErr.message}`);
+  if (!sessionData?.session?.access_token) throw new Error("Auth session missing (no access_token)");
 
-  if (refreshError || !jwt) {
-    // Fallback to existing session if refresh fails (network issues, etc.)
-    const { data: { session: fallbackSession } } = await supabase.auth.getSession();
-    const fallbackJwt = fallbackSession?.access_token;
-    if (!fallbackJwt) throw new Error("No auth session for Agora token");
-    console.log("⚠️ Session refresh failed, using existing session:", refreshError?.message);
-
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${fallbackJwt}`,
-      },
-      body: JSON.stringify({ device_id: channelId, uid, role }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
-    }
-    return await res.json();
-  }
-
-  console.log("✅ Session refreshed for Agora token fetch");
-
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/agora-token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${jwt}`,
+  // Invoke edge function (supabase-js attaches Authorization automatically)
+  const { data, error } = await supabase.functions.invoke("agora-token", {
+    body: {
+      device_id: deviceId,
+      uid,
+      role,
+      expire,
     },
-    body: JSON.stringify({ device_id: channelId, uid, role }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    console.error("❌ Agora token fetch error:", { status: res.status, error: err.error || err, channel: channelId, role, uid });
-    throw new Error(err.error || `Agora token fetch failed: ${res.status}`);
+  if (error) {
+    const msg = error.message || "Edge function invoke failed";
+    console.error("❌ Agora invoke failed (full):", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    throw new Error(msg);
   }
-  return await res.json();
+
+  // Expected: { token, app_id, channel, uid, expires_in }
+  if (!data?.token || !data?.app_id) {
+    throw new Error(`Invalid token response from edge function: ${JSON.stringify(data)}`);
+  }
+
+  return data;
 }
 
 /**
@@ -321,7 +302,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
     let agoraToken = null;
     let appId = null;
     try {
-      const tokenData = await fetchAgoraToken(channelId, "publisher", publisherUid);
+      const tokenData = await fetchAgoraTokenViaInvoke({ deviceId: channelId, uid: publisherUid, role: "publisher" });
       agoraToken = tokenData.token;
       appId = tokenData.app_id;
       console.log("✅ Agora token fetched for channel:", channelId, "publisherUid:", publisherUid);
@@ -432,7 +413,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         onTokenPrivilegeWillExpire: async () => {
           console.log("🔄 Agora token expiring, renewing...");
           try {
-            const tokenData = await fetchAgoraToken(channelId, "publisher", publisherUid);
+            const tokenData = await fetchAgoraTokenViaInvoke({ deviceId: channelId, uid: publisherUid, role: "publisher" });
             if (agoraEngine.current && typeof agoraEngine.current.renewToken === "function") {
               agoraEngine.current.renewToken(tokenData.token);
               console.log("✅ Agora token renewed for publisherUid:", publisherUid);
