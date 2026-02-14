@@ -1267,7 +1267,6 @@ export default function FleetScreen() {
       if (isMountedRef.current) setLoading(false); // ✅ prevents "loading forever"
       return;
     }
-    initialBootDoneRef.current = true;
 
     setLoading(true);
 
@@ -1283,6 +1282,9 @@ export default function FleetScreen() {
         }
         return;
       }
+
+      // ✅ Only mark boot done once session is confirmed valid
+      initialBootDoneRef.current = true;
 
       // ✅ First, ensure user has both Work and Family fleets
       // Timeout + session guard are handled inside ensureUserFleets() itself.
