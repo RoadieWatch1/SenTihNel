@@ -20,7 +20,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { supabase } from "../../src/lib/supabase";
-import { handshakeDevice } from "../../src/services/deviceHandshake";
+import { handshakeDevice, deriveDisplayName } from "../../src/services/deviceHandshake";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
 
 let SecureStore = null;
@@ -760,7 +760,14 @@ export default function AuthPage() {
 
       // ✅ prefer stored per-user name if UI is empty
       const storedName = await loadDisplayNameForUser(userId);
-      const effectiveName = String(displayName || "").trim() || storedName;
+      let effectiveName = String(displayName || "").trim() || storedName;
+
+      // ✅ FIX: derive from email/metadata if no name was typed or stored
+      if (!effectiveName) {
+        const derived = deriveDisplayName({ user: server, deviceId: null });
+        if (derived && !derived.startsWith("Member")) effectiveName = derived;
+      }
+
       const dnStored = await persistDisplayNameForUser(userId, effectiveName);
 
       const owned = await getOwnedGroupForUser(userId);
@@ -1035,7 +1042,17 @@ export default function AuthPage() {
       if (storedName && !String(displayName || "").trim()) {
         setDisplayName(storedName);
       }
-      const dn = await persistDisplayNameForUser(matched.id, storedName || displayName);
+      let dn = await persistDisplayNameForUser(matched.id, storedName || displayName);
+
+      // ✅ FIX: If no name was stored or typed, derive from user email/metadata
+      // so member cards show a real name instead of "Member • XXXX" or "Device"
+      if (!dn) {
+        const derived = deriveDisplayName({ user: matched, deviceId: null });
+        if (derived && !derived.startsWith("Member")) {
+          dn = derived;
+          await persistDisplayNameForUser(matched.id, dn);
+        }
+      }
 
       await logAuth("after-login");
 

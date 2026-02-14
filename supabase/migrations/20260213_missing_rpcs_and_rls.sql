@@ -214,3 +214,62 @@ DROP POLICY IF EXISTS "Users can delete own devices" ON public.devices;
 CREATE POLICY "Users can delete own devices"
 ON public.devices FOR DELETE
 USING (user_id = auth.uid());
+
+
+-- ============================================================
+-- SECTION 5b: RLS for tracking_sessions
+-- ============================================================
+-- Fleet members can SELECT tracking_sessions for their group.
+-- Without this, any authenticated user could read ALL groups'
+-- location data. Writes go through upsert_tracking_session RPC
+-- (SECURITY DEFINER), so only SELECT is needed client-side.
+-- ============================================================
+
+ALTER TABLE public.tracking_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Fleet members can read group tracking" ON public.tracking_sessions;
+CREATE POLICY "Fleet members can read group tracking"
+ON public.tracking_sessions FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.group_members gm
+    WHERE gm.group_id = tracking_sessions.group_id AND gm.user_id = auth.uid()
+  )
+  OR
+  EXISTS (
+    SELECT 1 FROM public.groups g
+    WHERE g.id = tracking_sessions.group_id AND g.owner_user_id = auth.uid()
+  )
+);
+
+
+-- ============================================================
+-- SECTION 6: Table-level GRANTs for authenticated role
+-- ============================================================
+-- RLS policies filter which ROWS the user can see, but the
+-- authenticated role also needs table-level SELECT permission.
+-- Without these GRANTs, queries return "permission denied for table X"
+-- instead of filtered results.
+-- ============================================================
+
+-- tracking_sessions: client reads fleet member locations
+GRANT SELECT ON public.tracking_sessions TO authenticated;
+
+-- devices: client reads device names (hydrateNamesForSessions) and active status
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.devices TO authenticated;
+
+-- groups: client reads group info (owner_user_id, invite_code)
+GRANT SELECT ON public.groups TO authenticated;
+
+-- group_members: client reads own memberships
+GRANT SELECT ON public.group_members TO authenticated;
+
+
+-- ============================================================
+-- SECTION 7: GRANT EXECUTE for upsert_tracking_session
+-- ============================================================
+-- LiveTracker calls this RPC to upsert GPS data. Without the
+-- GRANT, the client gets "permission denied for function".
+-- ============================================================
+
+GRANT EXECUTE ON FUNCTION public.upsert_tracking_session(TEXT, UUID, JSONB) TO authenticated;

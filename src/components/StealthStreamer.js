@@ -93,6 +93,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
   const initLockRef = useRef(false);
   const mountedRef = useRef(true);
   const retryCountRef = useRef(0);
+  const permanentFailRef = useRef(false); // true = server rejected (bad token/creds), don't auto-retry
   const eventHandlerRef = useRef(null);
 
   const [isLive, setIsLive] = useState(false);
@@ -126,7 +127,9 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
 
     console.log(`🔴 STEALTH MODE: Initializing Systems for Channel ${channelId}...`);
 
-    // Set defaults
+    // Reset state for new channel
+    permanentFailRef.current = false;
+    retryCountRef.current = 0;
     currentFacingRef.current = defaultFacing;
     pendingFacingRef.current = defaultFacing;
     setFacing(defaultFacing);
@@ -168,9 +171,11 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
   }, [channelId]);
 
   // ✅ Network recovery: restart Agora if it gave up after max retries
+  // ONLY for transient (network) errors — NOT for permanent failures (bad token/creds)
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       if (!mountedRef.current) return;
+      if (permanentFailRef.current) return; // server rejected — don't retry on network change
       if (state.isConnected && engineState === "error" && !initLockRef.current) {
         console.log("📡 Network recovered — restarting Agora after previous failure");
         retryCountRef.current = 0;
@@ -419,6 +424,14 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         onError: (err, msg) => {
           console.error("❌ AGORA ERROR:", err, msg);
           if (!mountedRef.current) return;
+
+          // Agora error codes: 110 = ERR_INVALID_TOKEN, 109 = ERR_TOKEN_EXPIRED,
+          // 17 = ERR_INVALID_APP_ID. These are permanent — don't auto-retry.
+          if (err === 110 || err === 109 || err === 17) {
+            console.error(`❌ Agora permanent error (code ${err}) — check App ID / Certificate in Agora Console`);
+            permanentFailRef.current = true;
+          }
+
           setEngineState("error");
           initLockRef.current = false;
         },
@@ -442,17 +455,29 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
         },
 
         // Monitor connection state for better error recovery
+        // State: 1=DISCONNECTED, 2=CONNECTING, 3=CONNECTED, 4=RECONNECTING, 5=FAILED
+        // Reason: 0=CONNECTING, 1=JOIN_SUCCESS, 8=REJECTED_BY_SERVER, 9=SETTING_PROXY_SERVER, etc.
         onConnectionStateChanged: (_connection, state, reason) => {
           console.log(`📡 Agora connection: state=${state} reason=${reason}`);
           if (!mountedRef.current) return;
 
-          // State 3 = CONNECTED — reset retry counter
+          // State 3 = CONNECTED — reset retry counter and clear permanent fail
           if (state === 3) {
             retryCountRef.current = 0;
+            permanentFailRef.current = false;
           }
 
-          // State 5 = FAILED — auto-retry with backoff (max 3 attempts)
+          // State 5 = FAILED
           if (state === 5) {
+            // Reason 8 = REJECTED_BY_SERVER — permanent auth/token failure, don't retry
+            if (reason === 8) {
+              console.error("❌ Agora: REJECTED_BY_SERVER — invalid token or App ID. Check Agora Console credentials.");
+              permanentFailRef.current = true;
+              setEngineState("error");
+              initLockRef.current = false;
+              return;
+            }
+
             retryCountRef.current += 1;
             if (retryCountRef.current > 3) {
               console.error("❌ Agora: max retries (3) reached, giving up");
@@ -460,7 +485,7 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
               initLockRef.current = false;
               return;
             }
-            console.error(`❌ Agora connection FAILED — retry ${retryCountRef.current}/3`);
+            console.error(`❌ Agora connection FAILED (reason=${reason}) — retry ${retryCountRef.current}/3`);
             // Clean up current engine before retry
             try { agoraEngine.current?.leaveChannel(); } catch {}
             try { agoraEngine.current?.release(); } catch {}

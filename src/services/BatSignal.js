@@ -49,7 +49,9 @@ const REC_STOP_FN = "agora-recording-stop";
 const SOS_NOTIFY_FN = "send-sos-notifications";
 
 // ✅ AUTO-START CLOUD RECORDING ONLY WHEN SOS IS ACTIVATED (backup safety)
-const ENABLE_CLOUD_RECORDING_AUTOSTART = true;
+// ⚠️ Disabled: agora-recording-start/stop functions not yet deployed.
+// Re-enable once those edge functions exist + AGORA_CUSTOMER_ID/SECRET are set.
+const ENABLE_CLOUD_RECORDING_AUTOSTART = false;
 
 // ✅ Prevent spamming recording-start (start only once per SOS session)
 const CLOUDREC_STARTED_PREFIX = "sentinel_cloudrec_started:";

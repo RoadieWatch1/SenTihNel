@@ -75,7 +75,7 @@ function titleizeEmailLocal(local) {
     .join(" ");
 }
 
-function deriveDisplayName({ user, deviceId }) {
+export function deriveDisplayName({ user, deviceId }) {
   const meta = user?.user_metadata || {};
   const mName =
     (meta?.full_name && String(meta.full_name).trim()) ||

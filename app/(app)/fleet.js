@@ -1366,6 +1366,18 @@ export default function FleetScreen() {
       // ✅ FIX: Request permissions + start tracking here (fleet is now the first screen after login).
       // Previously this only happened in home.js, so redirecting to fleet meant permissions were never asked.
       requestPermissionsAndStartTracking();
+
+      // ✅ FIX: Force an immediate GPS sync so a tracking_sessions row exists for this fleet,
+      // then re-fetch. Without this, the first fetchFleet returns 0 rows because the tracker
+      // hasn't upserted yet, leaving the fleet empty until a manual tab switch.
+      if (gidToUse) {
+        (async () => {
+          try { await rebindTrackerToLatestFleet("boot"); } catch {}
+          if (isMountedRef.current && fetchFleetRef.current) {
+            fetchFleetRef.current(gidToUse);
+          }
+        })();
+      }
     } catch (e) {
       console.log("boot error:", e?.message || e);
       if (isMountedRef.current) setErrorText("Could not load fleet. Pull down to retry.");

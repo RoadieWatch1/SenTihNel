@@ -40,6 +40,13 @@ serve(async (req: Request) => {
   const agoraAppId = Deno.env.get("AGORA_APP_ID") ?? "";
   const agoraCert = Deno.env.get("AGORA_APP_CERTIFICATE") ?? "";
 
+  // ── Debug: verify secrets are correct length ────────────
+  console.log("AGORA ENV CHECK", {
+    appIdLen: agoraAppId?.length ?? 0,
+    certLen: agoraCert?.length ?? 0,
+    appIdPrefix: (agoraAppId ?? "").slice(0, 6),
+  });
+
   // ── Health check ────────────────────────────────────────
   if (req.method === "GET") {
     return json({
@@ -47,6 +54,8 @@ serve(async (req: Request) => {
       VERSION,
       hasAppId: !!agoraAppId,
       hasCert: !!agoraCert,
+      appIdLen: agoraAppId?.length ?? 0,
+      certLen: agoraCert?.length ?? 0,
     });
   }
 
