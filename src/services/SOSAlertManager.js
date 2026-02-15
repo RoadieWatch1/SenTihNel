@@ -713,6 +713,7 @@ async function checkForResolvedAlerts(groupId) {
  * ✅ FIX: Start periodic DB polling to catch missed SOS cancel broadcasts.
  * When a cancel broadcast is missed (WebSocket momentary disconnect), the overlay
  * stays forever. This poll checks the DB every 15s while alerts are active.
+ * ✅ FIX (Step 4): Stop polling if all active alerts are engaged (guard in Live View)
  */
 function startResolvedPoll() {
   if (resolvedPollTimer) return; // Already running
@@ -724,6 +725,19 @@ function startResolvedPoll() {
       stopResolvedPoll();
       return;
     }
+
+    // ✅ FIX (Step 4): Stop polling if all active alerts are engaged
+    // No need to poll DB when guard is actively viewing all incidents
+    const allEngaged = Array.from(activeSOSAlerts.values()).every(alert =>
+      alert.incidentKey && engagedIncidents.has(alert.incidentKey)
+    );
+
+    if (allEngaged) {
+      console.log("SOSAlertManager: All alerts engaged - pausing resolved-alert polling");
+      stopResolvedPoll();
+      return;
+    }
+
     for (const gid of currentGroupIds) {
       await checkForResolvedAlerts(gid);
     }
@@ -786,6 +800,16 @@ function setEngaged(deviceId, timestamp) {
 
   // Stop alarm immediately when guard engages
   AlarmService.stopAlarm().catch(() => {});
+
+  // ✅ FIX (Step 4): Stop polling if all active alerts are now engaged
+  const allEngaged = Array.from(activeSOSAlerts.values()).every(alert =>
+    alert.incidentKey && engagedIncidents.has(alert.incidentKey)
+  );
+
+  if (allEngaged && resolvedPollTimer) {
+    console.log("SOSAlertManager: All alerts engaged - stopping resolved-alert polling");
+    stopResolvedPoll();
+  }
 }
 
 /**
