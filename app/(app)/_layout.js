@@ -12,6 +12,7 @@ import {
 import SOSAlertOverlay from "../../src/components/SOSAlertOverlay";
 import SOSAlertManager from "../../src/services/SOSAlertManager";
 import AlarmService from "../../src/services/AlarmService";
+import ForegroundService from "../../src/services/ForegroundService";
 
 let SecureStore = null;
 try { SecureStore = require("expo-secure-store"); } catch {}
@@ -22,8 +23,9 @@ function CustomDrawerContent(props) {
   const router = useRouter();
 
   const handleLogout = async () => {
-    // 1) Stop alarm immediately (no network needed)
+    // 1) Stop alarm and foreground service immediately (no network needed)
     try { AlarmService.stopAlarm(); } catch {}
+    try { ForegroundService.stopForegroundService(); } catch {}
 
     const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
 
@@ -174,6 +176,11 @@ export default function AppLayout() {
               latitude: data.latitude,
               longitude: data.longitude,
             });
+            // Update foreground notification to show SOS alert
+            ForegroundService.updateNotification(
+              "🚨 SOS ALERT ACTIVE",
+              `${data.displayName || "Fleet member"} needs immediate help!`
+            ).catch(() => {});
           },
           onSOSCancelled: (deviceId) => {
             if (!mounted) return;
@@ -184,6 +191,11 @@ export default function AppLayout() {
               if (!deviceId) return null;
               return prev?.deviceId === deviceId ? null : prev;
             });
+            // Restore normal notification
+            ForegroundService.updateNotification(
+              "🛡️ SENTIHNEL SHIELD ACTIVE",
+              "Protection running - Location tracking enabled"
+            ).catch(() => {});
           },
           onSOSAcknowledged: (deviceId, byDeviceId) => {
             console.log("AppLayout: SOS acknowledged", deviceId, "by", byDeviceId);
@@ -191,6 +203,14 @@ export default function AppLayout() {
         });
 
         console.log("AppLayout: SOS Alert Manager initialized");
+
+        // ✅ Start foreground service for all-day background operation
+        try {
+          await ForegroundService.startForegroundService();
+          console.log("AppLayout: Foreground service started");
+        } catch (e) {
+          console.log("AppLayout: Failed to start foreground service", e);
+        }
       } catch (e) {
         console.log("AppLayout: Failed to init SOS manager", e);
       }
@@ -201,6 +221,8 @@ export default function AppLayout() {
     return () => {
       mounted = false;
       SOSAlertManager.cleanup();
+      // Stop foreground service on unmount
+      ForegroundService.stopForegroundService().catch(() => {});
     };
   }, []);
 

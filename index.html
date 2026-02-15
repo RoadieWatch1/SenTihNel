@@ -836,6 +836,27 @@
       letter-spacing: 1px;
     }
 
+    /* Navigate button for SOS cards */
+    .sos-nav-btn {
+      padding: 6px 12px;
+      background: rgba(0, 243, 255, 0.15);
+      border: 1px solid rgba(0, 243, 255, 0.5);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .sos-nav-btn:hover {
+      background: rgba(0, 243, 255, 0.25);
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
+    }
+
     /* ═══════════════════════════════════════════════════════════════
        FLEET MEMBER MARKERS (Different colors by status)
        ═══════════════════════════════════════════════════════════════ */
@@ -1859,8 +1880,26 @@
         info.appendChild(nameEl);
         info.appendChild(meta);
 
+        // ✅ Navigate button - opens Google Maps for driving directions
+        const navBtn = document.createElement('button');
+        navBtn.className = 'sos-nav-btn';
+        navBtn.textContent = '🧭 Navigate';
+        navBtn.onclick = (e) => {
+          e.stopPropagation(); // Don't trigger card selection
+          const lat = member.latitude;
+          const lng = member.longitude;
+          if (typeof lat === 'number' && typeof lng === 'number') {
+            // Open Google Maps with directions (works on all platforms)
+            const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+            window.open(url, '_blank');
+          } else {
+            alert('Location unavailable - cannot navigate');
+          }
+        };
+
         card.appendChild(icon);
         card.appendChild(info);
+        card.appendChild(navBtn);
         frag.appendChild(card);
       });
 
@@ -1964,6 +2003,10 @@
         // Reconnect video to new SOS
         await safeLeaveAgora();
         camTracks.front = null;
+        // ✅ Stop audio track before clearing (prevents audio continuing after SOS switch)
+        if (remoteAudioTrack) {
+          try { remoteAudioTrack.stop(); } catch {}
+        }
         remoteAudioTrack = null;
         audioUnmuted = false; // Reset audio state when switching SOS
         showOverlay(true, 'CONNECTING TO SOS FEED...');
@@ -2059,8 +2102,8 @@
     function initMap() {
       const initialCenter = HAS_URL_COORDS ? [URL_LNG, URL_LAT] : DEFAULT_CENTER;
 
-      // ✅ Zoomed out 20% for better context view
-      const initialZoom = HAS_URL_COORDS ? 15.2 : 13.6;
+      // ✅ Closer zoom for better detail view
+      const initialZoom = HAS_URL_COORDS ? 17.0 : 15.5;
 
       map = new maplibregl.Map({
         container: 'map',
