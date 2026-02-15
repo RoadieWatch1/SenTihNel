@@ -880,10 +880,10 @@ export const sendBatSignal = async (arg) => {
   const currentGroupId = await getGroupId();
   const displayName = await getDisplayName();
 
-  // ✅ Fetch ALL groups the user belongs to (member + owner)
-  const allGroupIds = await getAllMyGroupIdsSafe();
-  const targets = Array.from(new Set([currentGroupId, ...allGroupIds])).filter(Boolean);
-  console.log("🚨 SOS targets:", targets.length, "fleets");
+  // ✅ FIX (Step 3): Only broadcast to the sender's CURRENT fleet (prevents duplicate alerts)
+  // Previously broadcast to ALL fleets user belongs to, causing 4x duplicate alarms
+  const targets = currentGroupId ? [currentGroupId] : [];
+  console.log("🚨 SOS targets:", targets.length, "fleet(s):", targets.map(g => g?.slice(0, 8)));
 
   // ✅ FAST last-known first, then refine
   const { fast, refined } = await getFastThenRefineLocation();
@@ -899,7 +899,7 @@ export const sendBatSignal = async (arg) => {
   // Force immediate SOS sync using last-known coords if we have them
   await safeForceSOSSync({ lat: fastLat, lng: fastLng, accuracy: fastAcc });
 
-  // ✅ Fleet-wide in-app alert — broadcast to ALL fleets the user belongs to
+  // ✅ Fleet-wide in-app alert — broadcast ONLY to sender's current fleet
   let anyBroadcastOk = false;
   for (const gid of targets) {
     const broadcastArgs = { groupId: gid, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng };
@@ -1096,9 +1096,8 @@ export const cancelBatSignal = async () => {
     displayName = await getDisplayName();
   } catch {}
 
-  // ✅ Fetch ALL groups to cancel across all fleets
-  const allGroupIds = await getAllMyGroupIdsSafe();
-  const cancelTargets = Array.from(new Set([currentGroupId, ...allGroupIds])).filter(Boolean);
+  // ✅ FIX (Step 3): Only cancel in sender's CURRENT fleet (matches SOS broadcast fix)
+  const cancelTargets = currentGroupId ? [currentGroupId] : [];
 
   // ✅ Step 1a: Quick OFFLINE RPC FIRST — so DB is updated before fleet re-fetches
   // Short timeout (1.5s) so it doesn't delay the broadcast. If it fails, Step 3 retries.
