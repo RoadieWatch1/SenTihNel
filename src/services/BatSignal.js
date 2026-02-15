@@ -1088,7 +1088,17 @@ export const sendCheckIn = async () => {
 export const cancelBatSignal = async () => {
   console.log("🟢 SOS CANCEL: Restoring privacy (stopping all sharing)...");
 
-  // ✅ Step 0: Resolve identifiers upfront (needed for broadcast + cleanup)
+  // ✅ Step 0a: Clear SOS flag IMMEDIATELY (before any DB writes or broadcasts).
+  // This is critical: the background tracker reads this flag on every sync.
+  // If we clear it AFTER the OFFLINE RPC, a background sync can race and
+  // write status='SOS' back to the DB, which re-triggers notify_fleet_sos
+  // and sends a SECOND alarm notification during deactivation.
+  try {
+    await clearSOS();
+    console.log("✅ SOS flag cleared (background tracker will stop sending SOS)");
+  } catch {}
+
+  // ✅ Step 0b: Resolve identifiers upfront (needed for broadcast + cleanup)
   let deviceId, currentGroupId, displayName;
   try {
     deviceId = await getDeviceId();
@@ -1099,7 +1109,7 @@ export const cancelBatSignal = async () => {
   // ✅ FIX (Step 3): Only cancel in sender's CURRENT fleet (matches SOS broadcast fix)
   const cancelTargets = currentGroupId ? [currentGroupId] : [];
 
-  // ✅ Step 1a: Quick OFFLINE RPC FIRST — so DB is updated before fleet re-fetches
+  // ✅ Step 1a: Quick OFFLINE RPC — so DB is updated before fleet re-fetches
   // Short timeout (1.5s) so it doesn't delay the broadcast. If it fails, Step 3 retries.
   try {
     if (deviceId && currentGroupId) {
@@ -1148,10 +1158,8 @@ export const cancelBatSignal = async () => {
   }
 
   // ✅ Step 3: Run ALL cleanup in PARALLEL (nothing should block the cancel)
+  // NOTE: clearSOS() already ran in Step 0a (must be first to prevent race condition)
   await Promise.allSettled([
-    // Clear SOS flag in AsyncStorage
-    withTimeout(clearSOS(), CANCEL_TIMEOUT_MS, "clearSOS_timeout").catch(() => {}),
-
     // Stop background GPS tracking + mark OFFLINE
     withTimeout(stopLiveTracking(), CANCEL_TIMEOUT_MS, "stopLiveTracking_timeout")
       .then(() => console.log("✅ GPS tracking stopped (privacy restored)"))
