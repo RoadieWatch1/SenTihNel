@@ -903,12 +903,13 @@ export default function FleetScreen() {
         return;
       }
 
-      // ✅ FIX: Don't filter by group_id — the device may have moved to a different fleet
-      // but its display_name is still valid. tracking_sessions is already filtered by group.
+      // ✅ FIX: Use RPC to bypass RLS - allows reading display names for devices
+      // in tracking_sessions even if device moved to different fleet
       const { data, error } = await supabase
-        .from("devices")
-        .select("device_id, display_name")
-        .in("device_id", deviceIds);
+        .rpc("get_display_names_for_fleet", {
+          p_group_id: gid,
+          p_device_ids: deviceIds,
+        });
 
       console.log("🔍 hydrateNamesForSessions: query result", {
         dataRows: data?.length,
