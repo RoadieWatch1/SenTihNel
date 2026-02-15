@@ -55,6 +55,11 @@ let activeSOSAlerts = new Map(); // deviceId -> sosData
 // ✅ Track engaged/acknowledged SOS (prevents re-alarming while in Live View)
 let engagedIncidents = new Map(); // incidentKey -> timestamp
 
+// ✅ FIX (Step 2): Track handled incidents to prevent duplicate alarm triggers
+// If same SOS broadcast received multiple times (retries, network delays), ignore duplicates
+let handledIncidents = new Map(); // incidentKey -> timestamp
+const HANDLED_INCIDENT_TTL_MS = 5 * 60 * 1000; // Keep for 5 minutes then auto-cleanup
+
 // ============================================
 // INITIALIZATION
 // ============================================
@@ -158,6 +163,10 @@ async function cleanup() {
 
   // Stop any playing alarm
   await AlarmService.stopAlarm();
+
+  // ✅ Clear deduplication and engagement tracking
+  handledIncidents.clear();
+  engagedIncidents.clear();
 
   isInitialized = false;
 }
@@ -321,12 +330,23 @@ async function handleSOSBroadcast(sosData) {
     return;
   }
 
-  // ✅ FIX (Step 1): Check if this incident is already engaged (guard in Live View)
+  // ✅ FIX (Step 2): Deduplication - ignore if we already handled this exact incident
+  // Prevents duplicate alarms from retry broadcasts, network delays, or multi-fleet spam
   const incidentKey = `${device_id}:${timestamp || Date.now()}`;
+  if (handledIncidents.has(incidentKey)) {
+    console.log("SOSAlertManager: Duplicate SOS ignored (already handled)", incidentKey);
+    return;
+  }
+
+  // ✅ FIX (Step 1): Check if this incident is already engaged (guard in Live View)
   if (engagedIncidents.has(incidentKey)) {
     console.log("SOSAlertManager: Incident already engaged - suppressing alarm", incidentKey);
     return;
   }
+
+  // ✅ FIX (Step 2): Mark incident as handled to prevent duplicate processing
+  handledIncidents.set(incidentKey, Date.now());
+  cleanupOldHandledIncidents(); // Periodic cleanup to prevent memory leak
 
   // Store active SOS
   activeSOSAlerts.set(device_id, {
@@ -718,6 +738,30 @@ function stopResolvedPoll() {
     clearInterval(resolvedPollTimer);
     resolvedPollTimer = null;
     console.log("SOSAlertManager: Stopped resolved-alert polling");
+  }
+}
+
+// ============================================
+// DEDUPLICATION CLEANUP
+// ============================================
+
+/**
+ * ✅ FIX (Step 2): Clean up old handled incidents to prevent memory leak
+ * Removes incidents older than HANDLED_INCIDENT_TTL_MS (5 minutes)
+ */
+function cleanupOldHandledIncidents() {
+  const now = Date.now();
+  let removedCount = 0;
+
+  for (const [key, handledAt] of handledIncidents) {
+    if (now - handledAt > HANDLED_INCIDENT_TTL_MS) {
+      handledIncidents.delete(key);
+      removedCount++;
+    }
+  }
+
+  if (removedCount > 0) {
+    console.log(`SOSAlertManager: Cleaned up ${removedCount} old handled incidents`);
   }
 }
 
