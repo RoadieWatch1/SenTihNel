@@ -1412,8 +1412,22 @@ export default function FleetScreen() {
       }
 
       // ✅ Bug 6 fix: Persist resolved groupId so deviceHandshake.js can read it on restart
+      // ✅ Also persist fleet type so auth.js can respect it on next login (prevents random fleet binding)
       if (gidToUse) {
         try { await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gidToUse); } catch {}
+        try { await AsyncStorage.setItem(STORAGE_KEY_SELECTED_FLEET, savedFleetType || "family"); } catch {}
+      }
+
+      // ✅ FIX: Bind device to selected fleet IMMEDIATELY (no GPS dependency).
+      // This is the critical difference vs. tab switch — boot was missing this direct call,
+      // so devices.group_id stayed on whatever fleet auth picked (often work).
+      // handshakeDevice only touches the devices table (no GPS needed).
+      if (gidToUse) {
+        try {
+          await handshakeDevice({ groupId: gidToUse });
+        } catch (e) {
+          console.log("boot: handshakeDevice warning (non-fatal):", e?.message || e);
+        }
       }
 
       // Set invite code from cache, or fetch if missing
@@ -1436,7 +1450,8 @@ export default function FleetScreen() {
 
       // ✅ FIX: Request permissions + start tracking here (fleet is now the first screen after login).
       // Previously this only happened in home.js, so redirecting to fleet meant permissions were never asked.
-      requestPermissionsAndStartTracking();
+      // ✅ FIX: Await permissions so GPS is ready before rebind attempt.
+      await requestPermissionsAndStartTracking();
 
       // ✅ FIX: Force an immediate GPS sync so a tracking_sessions row exists for this fleet,
       // then re-fetch. Without this, the first fetchFleet returns 0 rows because the tracker

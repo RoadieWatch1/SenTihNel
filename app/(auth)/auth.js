@@ -367,10 +367,46 @@ async function getGroupIdsForUser(userId) {
   return Array.isArray(data) ? data.map((r) => r?.group_id).filter(Boolean) : [];
 }
 
-// ✅ Keep old helper for “resume”
+// ✅ FIX: Family-first fleet selection (deterministic, not random DB order)
+// Prevents auth from binding device to work fleet when user expects family.
 async function getGroupIdForUser(userId) {
-  const gids = await getGroupIdsForUser(userId);
-  return gids.length ? gids[0] : null;
+  if (!userId) return null;
+
+  try {
+    // First check if user has a saved fleet preference
+    const savedType = await AsyncStorage.getItem("sentinel_selected_fleet_type");
+
+    // Query memberships WITH fleet_type so we can pick intelligently
+    const { data, error } = await supabase
+      .from("group_members")
+      .select("group_id, groups(fleet_type)")
+      .eq("user_id", userId);
+
+    if (error || !Array.isArray(data) || data.length === 0) {
+      // Fallback to old behavior
+      const gids = await getGroupIdsForUser(userId);
+      return gids.length ? gids[0] : null;
+    }
+
+    const rows = data.filter((r) => r?.group_id);
+
+    // 1) If user had a saved preference, honor it
+    if (savedType) {
+      const match = rows.find((r) => r.groups?.fleet_type === savedType);
+      if (match?.group_id) return match.group_id;
+    }
+
+    // 2) Default to family fleet
+    const family = rows.find((r) => r.groups?.fleet_type === "family");
+    if (family?.group_id) return family.group_id;
+
+    // 3) Fallback: first available
+    return rows[0]?.group_id || null;
+  } catch (e) {
+    console.log("getGroupIdForUser warning:", e?.message || e);
+    const gids = await getGroupIdsForUser(userId);
+    return gids.length ? gids[0] : null;
+  }
 }
 
 /**
