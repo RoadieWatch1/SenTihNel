@@ -52,6 +52,9 @@ let onSOSAcknowledged = null; // (deviceId, byDeviceId) => void
 // Track active SOS alerts
 let activeSOSAlerts = new Map(); // deviceId -> sosData
 
+// ✅ Track engaged/acknowledged SOS (prevents re-alarming while in Live View)
+let engagedIncidents = new Map(); // incidentKey -> timestamp
+
 // ============================================
 // INITIALIZATION
 // ============================================
@@ -318,10 +321,18 @@ async function handleSOSBroadcast(sosData) {
     return;
   }
 
+  // ✅ FIX (Step 1): Check if this incident is already engaged (guard in Live View)
+  const incidentKey = `${device_id}:${timestamp || Date.now()}`;
+  if (engagedIncidents.has(incidentKey)) {
+    console.log("SOSAlertManager: Incident already engaged - suppressing alarm", incidentKey);
+    return;
+  }
+
   // Store active SOS
   activeSOSAlerts.set(device_id, {
     ...sosData,
     receivedAt: Date.now(),
+    incidentKey, // Store incident key for tracking
   });
 
   // Save to AsyncStorage for persistence
@@ -715,6 +726,45 @@ function stopResolvedPoll() {
 // ============================================
 
 /**
+ * ✅ FIX (Step 1): Mark an incident as engaged (guard entered Live View)
+ * This prevents re-alarming for the same incident
+ * @param {string} deviceId - The device ID that triggered SOS
+ * @param {number} timestamp - The SOS timestamp (optional, uses current alert if not provided)
+ */
+function setEngaged(deviceId, timestamp) {
+  // Get timestamp from active alert if not provided
+  const alertData = activeSOSAlerts.get(deviceId);
+  const ts = timestamp || alertData?.timestamp || Date.now();
+  const incidentKey = `${deviceId}:${ts}`;
+
+  console.log("SOSAlertManager: Marking incident as engaged:", incidentKey);
+  engagedIncidents.set(incidentKey, Date.now());
+
+  // Stop alarm immediately when guard engages
+  AlarmService.stopAlarm().catch(() => {});
+}
+
+/**
+ * ✅ FIX (Step 1): Check if an incident is already engaged
+ * @param {string} deviceId - The device ID that triggered SOS
+ * @param {number} timestamp - The SOS timestamp (optional)
+ * @returns {boolean} True if incident is engaged
+ */
+function isEngaged(deviceId, timestamp) {
+  if (!timestamp) {
+    // If no timestamp provided, check by deviceId prefix
+    for (const key of engagedIncidents.keys()) {
+      if (key.startsWith(`${deviceId}:`)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  const incidentKey = `${deviceId}:${timestamp}`;
+  return engagedIncidents.has(incidentKey);
+}
+
+/**
  * Acknowledge an SOS alert
  * Stops alarm for this device and broadcasts acknowledgment
  * ✅ FIX: Now updates database to stop future notifications
@@ -821,6 +871,8 @@ export const SOSAlertManager = {
   getActiveAlerts,
   hasActiveAlerts,
   updateGroup,
+  setEngaged,  // ✅ Step 1: Track when guard enters Live View
+  isEngaged,   // ✅ Step 1: Check if incident is already engaged
 };
 
 export default SOSAlertManager;

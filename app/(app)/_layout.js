@@ -228,8 +228,12 @@ export default function AppLayout() {
 
   // Handle SOS alert actions
   // ✅ FIX (Bug 6): After acknowledging one alert, show the next active alert if any
+  // ✅ FIX (Step 1): Stop alarm immediately and mark incident as engaged
   const handleAcknowledge = useCallback(async () => {
     if (sosAlert?.deviceId) {
+      // ✅ Step 1: Stop alarm and mark incident as engaged BEFORE acknowledging
+      AlarmService.stopAlarm();
+      SOSAlertManager.setEngaged(sosAlert.deviceId);
       await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
     }
     // Check for remaining active alerts
@@ -248,8 +252,12 @@ export default function AppLayout() {
   }, [sosAlert]);
 
   // ✅ FIX (Bug 5): Acknowledge alert before navigating (prevents alarm restart on resume)
+  // ✅ FIX (Step 1): Stop alarm immediately and mark incident as engaged
   const handleViewLocation = useCallback(async () => {
     if (sosAlert?.deviceId) {
+      // ✅ Step 1: Stop alarm and mark incident as engaged BEFORE navigating to fleet
+      AlarmService.stopAlarm();
+      SOSAlertManager.setEngaged(sosAlert.deviceId);
       await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
     }
     router.push("/fleet");
