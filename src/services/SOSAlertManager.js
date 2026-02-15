@@ -34,6 +34,7 @@ const RESOLVED_POLL_INTERVAL_MS = 15_000; // Check every 15 seconds
 // ============================================
 
 let isInitialized = false;
+let isInitializing = false; // ✅ FIX (Step 5): Prevent concurrent initialization
 let currentGroupIds = []; // ✅ Multi-group support
 let myDeviceId = null;
 let realtimeChannels = new Map(); // groupId -> channel (broadcast — critical)
@@ -76,51 +77,63 @@ async function initialize(groupIds, deviceId, callbacks = {}) {
     (Array.isArray(groupIds) ? groupIds : [groupIds]).filter(Boolean).map(String)
   ));
 
+  // ✅ FIX (Step 5): Prevent concurrent initialization (race condition guard)
+  if (isInitializing) {
+    console.log("SOSAlertManager: Already initializing, skipping duplicate call");
+    return;
+  }
+
   // Check if already initialized with same groups
   if (isInitialized && JSON.stringify(currentGroupIds.sort()) === JSON.stringify(ids.sort())) {
     console.log("SOSAlertManager: Already initialized for these groups");
     return;
   }
 
+  isInitializing = true;
   console.log("SOSAlertManager: Initializing for", ids.length, "groups:", ids.map(g => g?.slice(0, 8)));
 
-  // Store references
-  currentGroupIds = ids;
-  myDeviceId = deviceId || (await AsyncStorage.getItem(MY_DEVICE_ID_KEY));
-  onSOSReceived = callbacks.onSOSReceived || null;
-  onSOSCancelled = callbacks.onSOSCancelled || null;
-  onSOSAcknowledged = callbacks.onSOSAcknowledged || null;
+  try {
+    // Store references
+    currentGroupIds = ids;
+    myDeviceId = deviceId || (await AsyncStorage.getItem(MY_DEVICE_ID_KEY));
+    onSOSReceived = callbacks.onSOSReceived || null;
+    onSOSCancelled = callbacks.onSOSCancelled || null;
+    onSOSAcknowledged = callbacks.onSOSAcknowledged || null;
 
-  // Cleanup any existing subscriptions
-  await cleanup();
+    // Cleanup any existing subscriptions
+    await cleanup();
 
-  // Register push tokens for ALL groups
-  const pushToken = await NotificationService.registerForPushNotifications();
-  if (pushToken && myDeviceId) {
-    for (const gid of ids) {
-      await NotificationService.savePushTokenToSupabase(pushToken, myDeviceId, gid);
+    // Register push tokens for ALL groups
+    const pushToken = await NotificationService.registerForPushNotifications();
+    if (pushToken && myDeviceId) {
+      for (const gid of ids) {
+        await NotificationService.savePushTokenToSupabase(pushToken, myDeviceId, gid);
+      }
     }
+
+    // ✅ Subscribe to broadcast + DB changes for EACH group
+    for (const gid of ids) {
+      subscribeToRealtimeChannel(gid);
+      subscribeToDbWatchChannel(gid);
+    }
+
+    // Listen for app state changes
+    setupAppStateListener();
+
+    // Setup notification response listeners
+    setupNotificationListeners();
+
+    // Check for any active SOS alerts we might have missed (all groups)
+    for (const gid of ids) {
+      await checkForActiveSOSAlerts(gid);
+    }
+
+    isInitialized = true;
+    console.log("SOSAlertManager: Initialized successfully for", ids.length, "groups");
+  } finally {
+    // ✅ FIX (Step 5): Always release initialization lock, even if initialization fails
+    isInitializing = false;
   }
-
-  // ✅ Subscribe to broadcast + DB changes for EACH group
-  for (const gid of ids) {
-    subscribeToRealtimeChannel(gid);
-    subscribeToDbWatchChannel(gid);
-  }
-
-  // Listen for app state changes
-  setupAppStateListener();
-
-  // Setup notification response listeners
-  setupNotificationListeners();
-
-  // Check for any active SOS alerts we might have missed (all groups)
-  for (const gid of ids) {
-    await checkForActiveSOSAlerts(gid);
-  }
-
-  isInitialized = true;
-  console.log("SOSAlertManager: Initialized successfully for", ids.length, "groups");
 }
 
 /**
@@ -169,6 +182,7 @@ async function cleanup() {
   engagedIncidents.clear();
 
   isInitialized = false;
+  isInitializing = false; // ✅ FIX (Step 5): Release initialization lock
 }
 
 // ============================================
@@ -469,8 +483,15 @@ function handleSOSAcknowledgeBroadcast(data) {
 
 /**
  * Setup app state change listener
+ * ✅ FIX (Step 5): Guard against duplicate listeners
  */
 function setupAppStateListener() {
+  // Don't create duplicate listener if one already exists
+  if (appStateSubscription) {
+    console.log("SOSAlertManager: App state listener already exists, skipping");
+    return;
+  }
+
   appStateSubscription = AppState.addEventListener("change", async (nextState) => {
     console.log("SOSAlertManager: App state changed to", nextState);
 
@@ -520,8 +541,15 @@ function setupAppStateListener() {
 
 /**
  * Setup notification response listeners
+ * ✅ FIX (Step 5): Guard against duplicate listeners
  */
 function setupNotificationListeners() {
+  // Don't create duplicate listeners if they already exist
+  if (notificationSubscriptions.length > 0) {
+    console.log("SOSAlertManager: Notification listeners already exist, skipping");
+    return;
+  }
+
   // Handle notification received in foreground
   const receivedSub = NotificationService.addNotificationReceivedListener(
     (notification) => {
