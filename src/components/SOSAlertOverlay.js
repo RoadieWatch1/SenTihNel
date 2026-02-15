@@ -11,9 +11,6 @@ import {
   TouchableOpacity,
   Dimensions,
   StatusBar,
-  Platform,
-  Linking,
-  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -37,8 +34,6 @@ export default function SOSAlertOverlay({
   visible,
   senderName,
   senderDeviceId,
-  latitude,
-  longitude,
   onAcknowledge,
   onViewLocation,
   onDismiss,
@@ -101,32 +96,6 @@ export default function SOSAlertOverlay({
     flashAnim.setValue(0);
   };
 
-  // Navigate to SOS location using native Maps app
-  const handleNavigate = async () => {
-    if (!latitude || !longitude) {
-      Alert.alert("Location Unavailable", "Cannot navigate - location data missing");
-      return;
-    }
-
-    const url = Platform.select({
-      ios: `http://maps.apple.com/?daddr=${latitude},${longitude}&dirflg=d`,
-      android: `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`,
-    });
-
-    try {
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        handleStopFlashing();
-        await Linking.openURL(url);
-      } else {
-        Alert.alert("Cannot Open Maps", "Navigation app not available on this device");
-      }
-    } catch (err) {
-      console.error("Navigation error:", err);
-      Alert.alert("Error", "Could not open navigation");
-    }
-  };
-
   if (!visible) return null;
 
   // Interpolate background color for flash effect
@@ -179,17 +148,6 @@ export default function SOSAlertOverlay({
 
       {/* Action Buttons */}
       <View style={styles.buttonContainer}>
-        {/* Navigate Button - Opens Maps app with directions */}
-        {latitude && longitude && (
-          <TouchableOpacity
-            style={[styles.button, styles.navigateButton]}
-            onPress={handleNavigate}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.buttonText}>🧭 NAVIGATE TO {(senderName || "MEMBER").toUpperCase()}</Text>
-          </TouchableOpacity>
-        )}
-
         {/* View Location Button */}
         {onViewLocation && (
           <TouchableOpacity
@@ -200,7 +158,7 @@ export default function SOSAlertOverlay({
             }}
             activeOpacity={0.8}
           >
-            <Text style={styles.buttonText}>📍 View in App</Text>
+            <Text style={styles.buttonText}>📍 View in Dashboard</Text>
           </TouchableOpacity>
         )}
 
@@ -213,7 +171,7 @@ export default function SOSAlertOverlay({
           }}
           activeOpacity={0.8}
         >
-          <Text style={styles.buttonText}>✓ Acknowledge</Text>
+          <Text style={styles.buttonText}>✓ Acknowledge & Stop Alarm</Text>
         </TouchableOpacity>
       </View>
 
@@ -307,9 +265,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-  },
-  navigateButton: {
-    backgroundColor: "#FF9500", // Orange - stands out for urgent action
   },
   locationButton: {
     backgroundColor: COLORS.white,

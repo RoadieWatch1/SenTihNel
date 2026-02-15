@@ -302,7 +302,9 @@ export default function FleetScreen() {
       allKeys: Object.keys(nameByDevice || {}),
       nameByDevice: nameByDevice
     });
-    if (name && String(name).trim()) return String(name).trim();
+    // ✅ If name is the SQL fallback "Device", treat it as missing and show better default
+    const trimmed = name ? String(name).trim() : "";
+    if (trimmed && trimmed !== "Device") return trimmed;
     return buildFallbackLabel(deviceId);
   };
 
@@ -872,6 +874,33 @@ export default function FleetScreen() {
     }
   };
 
+  // Navigate to member location with turn-by-turn directions (native Maps app)
+  const handleNavigate = async (item) => {
+    try {
+      const lat = item?.latitude;
+      const lng = item?.longitude;
+      if (typeof lat !== "number" || typeof lng !== "number") {
+        Alert.alert("Location Unavailable", "Cannot navigate - location data missing");
+        return;
+      }
+
+      const url = Platform.select({
+        ios: `http://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`,
+        android: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
+      });
+
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert("Cannot Open Maps", "Navigation app not available on this device");
+      }
+    } catch (err) {
+      console.log("Navigation error:", err);
+      Alert.alert("Error", "Could not open navigation");
+    }
+  };
+
   const showCoordinatesBox = (item) => {
     const coords = safeCoords(item?.latitude, item?.longitude);
     const who = getFriendlyName(item?.device_id);
@@ -1403,13 +1432,12 @@ export default function FleetScreen() {
       // ✅ FIX: Force an immediate GPS sync so a tracking_sessions row exists for this fleet,
       // then re-fetch. Without this, the first fetchFleet returns 0 rows because the tracker
       // hasn't upserted yet, leaving the fleet empty until a manual tab switch.
+      // ✅ FIX #2: Await the second fetch so names load before render (prevents "Device" names until tab switch)
       if (gidToUse) {
-        (async () => {
-          try { await rebindTrackerToLatestFleet("boot"); } catch {}
-          if (isMountedRef.current && fetchFleetRef.current) {
-            fetchFleetRef.current(gidToUse);
-          }
-        })();
+        try { await rebindTrackerToLatestFleet("boot"); } catch {}
+        if (isMountedRef.current && fetchFleetRef.current) {
+          await fetchFleetRef.current(gidToUse);
+        }
       }
     } catch (e) {
       console.log("boot error:", e?.message || e);
@@ -2076,6 +2104,17 @@ export default function FleetScreen() {
         </View>
 
         <View style={styles.cardActions}>
+          {/* Navigate button - only shows for SOS members */}
+          {isSOS && (
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.navigateBtn]}
+              onPress={() => handleNavigate(item)}
+            >
+              <Ionicons name="navigate" size={16} color="#0b1220" />
+              <Text style={[styles.actionBtnText]}>Navigate</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={[styles.actionBtn, styles.liveBtn, isSOS && styles.liveBtnSOS]}
             onPress={() => openLiveView(item)}
@@ -2975,6 +3014,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+
+  navigateBtn: {
+    backgroundColor: "#FF9500", // Orange - urgent action for SOS navigation
   },
 
   liveBtn: { backgroundColor: "#22c55e" },
