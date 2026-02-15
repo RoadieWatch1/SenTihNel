@@ -296,6 +296,12 @@ export default function FleetScreen() {
   const getFriendlyName = (deviceId) => {
     const key = String(deviceId || "");
     const name = nameByDevice?.[key];
+    console.log("🔍 getFriendlyName:", {
+      deviceId: key,
+      foundName: name,
+      allKeys: Object.keys(nameByDevice || {}),
+      nameByDevice: nameByDevice
+    });
     if (name && String(name).trim()) return String(name).trim();
     return buildFallbackLabel(deviceId);
   };
@@ -874,7 +880,12 @@ export default function FleetScreen() {
 
   const hydrateNamesForSessions = useCallback(async ({ gid, sessions }) => {
     try {
-      if (!gid || !Array.isArray(sessions) || sessions.length === 0) return;
+      console.log("🔍 hydrateNamesForSessions: START", { gid, sessionCount: sessions?.length });
+
+      if (!gid || !Array.isArray(sessions) || sessions.length === 0) {
+        console.log("🔍 hydrateNamesForSessions: EARLY EXIT - no gid or sessions");
+        return;
+      }
 
       const deviceIds = Array.from(
         new Set(
@@ -885,7 +896,12 @@ export default function FleetScreen() {
         )
       );
 
-      if (deviceIds.length === 0) return;
+      console.log("🔍 hydrateNamesForSessions: deviceIds to query", deviceIds);
+
+      if (deviceIds.length === 0) {
+        console.log("🔍 hydrateNamesForSessions: EARLY EXIT - no deviceIds");
+        return;
+      }
 
       // ✅ FIX: Don't filter by group_id — the device may have moved to a different fleet
       // but its display_name is still valid. tracking_sessions is already filtered by group.
@@ -893,6 +909,12 @@ export default function FleetScreen() {
         .from("devices")
         .select("device_id, display_name")
         .in("device_id", deviceIds);
+
+      console.log("🔍 hydrateNamesForSessions: query result", {
+        dataRows: data?.length,
+        error: error?.message,
+        rawData: data
+      });
 
       if (error) {
         console.log("devices name lookup warning:", error.message);
@@ -905,11 +927,21 @@ export default function FleetScreen() {
       for (const r of rows) {
         const dId = String(r?.device_id || "");
         const dName = r?.display_name ? String(r.display_name).trim() : "";
+        console.log("🔍 hydrateNamesForSessions: processing row", { dId, dName, willAdd: !!(dId && dName) });
         if (dId && dName) nextMap[dId] = dName;
       }
 
+      console.log("🔍 hydrateNamesForSessions: nextMap", nextMap);
+      console.log("🔍 hydrateNamesForSessions: isMountedRef.current", isMountedRef.current);
+
       if (Object.keys(nextMap).length > 0 && isMountedRef.current) {
+        console.log("🔍 hydrateNamesForSessions: calling setNameByDevice with", nextMap);
         setNameByDevice((prev) => ({ ...(prev || {}), ...nextMap }));
+      } else {
+        console.log("🔍 hydrateNamesForSessions: SKIP setNameByDevice", {
+          mapSize: Object.keys(nextMap).length,
+          isMounted: isMountedRef.current
+        });
       }
     } catch (e) {
       console.log("hydrateNamesForSessions error:", e?.message || e);

@@ -765,7 +765,8 @@ export default function AuthPage() {
       // ✅ FIX: derive from email/metadata if no name was typed or stored
       if (!effectiveName) {
         const derived = deriveDisplayName({ user: server, deviceId: null });
-        if (derived && !derived.startsWith("Member")) effectiveName = derived;
+        // Accept ANY derived name (ensures users always have a display_name in database)
+        if (derived) effectiveName = derived;
       }
 
       const dnStored = await persistDisplayNameForUser(userId, effectiveName);
@@ -1045,10 +1046,11 @@ export default function AuthPage() {
       let dn = await persistDisplayNameForUser(matched.id, storedName || displayName);
 
       // ✅ FIX: If no name was stored or typed, derive from user email/metadata
-      // so member cards show a real name instead of "Member • XXXX" or "Device"
+      // so member cards show a real name instead of empty/"Device"
       if (!dn) {
         const derived = deriveDisplayName({ user: matched, deviceId: null });
-        if (derived && !derived.startsWith("Member")) {
+        // Accept ANY derived name (ensures users always have a display_name in database)
+        if (derived) {
           dn = derived;
           await persistDisplayNameForUser(matched.id, dn);
         }

@@ -501,11 +501,15 @@ function setupNotificationListeners() {
 
   // Handle notification tap
   const responseSub = NotificationService.addNotificationResponseListener(
-    (response) => {
+    async (response) => {
       console.log("SOSAlertManager: Notification tapped");
       const data = response.notification.request.content.data;
 
       if (data?.type === "sos" && data?.device_id) {
+        // ✅ FIX: Stop alarm when user taps "View" to acknowledge the SOS
+        console.log("SOSAlertManager: User viewed SOS - acknowledging alert");
+        await acknowledgeAlert(data.device_id);
+
         // User tapped SOS notification - trigger UI callback
         if (onSOSReceived) {
           onSOSReceived({

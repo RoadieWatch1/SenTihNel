@@ -133,15 +133,54 @@ serve(async (req: Request) => {
       .eq("group_id", device.group_id)
       .eq("user_id", user.id);
 
+    const isFleetMember = (memberCount ?? 0) > 0;
+
     console.log("AGORA_TOKEN: membership", {
       userId: user.id,
       deviceId: device.device_id,
       groupId: device.group_id,
       memberCount,
+      role,
+      isFleetMember,
     });
 
-    if ((memberCount ?? 0) === 0) {
-      return json({ error: "Not authorized for this device's fleet" }, 403);
+    // ✅ PUBLISHERS (mobile devices) must always be fleet members
+    if (role === "publisher") {
+      if (!isFleetMember) {
+        return json({ error: "Publisher not authorized for this fleet" }, 403);
+      }
+    }
+
+    // ✅ SUBSCRIBERS (dashboard/guardians) can access video during SOS
+    if (role === "subscriber") {
+      // Option 1: User is fleet member → always allowed
+      if (isFleetMember) {
+        console.log("AGORA_TOKEN: subscriber authorized (fleet member)");
+      } else {
+        // Option 2: Check if device has active SOS → emergency override
+        const { data: session } = await supabase
+          .from("tracking_sessions")
+          .select("status")
+          .eq("device_id", deviceId)
+          .eq("group_id", device.group_id)
+          .single();
+
+        const hasActiveSOS = session?.status === "SOS";
+
+        console.log("AGORA_TOKEN: SOS check", {
+          deviceId,
+          sessionStatus: session?.status,
+          hasActiveSOS,
+        });
+
+        if (!hasActiveSOS) {
+          return json({
+            error: "Not authorized: must be fleet member or device must have active SOS",
+          }, 403);
+        }
+
+        console.log("AGORA_TOKEN: subscriber authorized (active SOS emergency override)");
+      }
     }
 
     // ── Generate Agora RTC token ────────────────────────
