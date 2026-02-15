@@ -2612,6 +2612,7 @@ export default function FleetScreen() {
 
       <FlatList
         data={sortedWorkers}
+        extraData={nameByDevice}  // ✅ Force re-render when names load
         keyExtractor={(item, idx) => String(item?.device_id || `row-${idx}`)}
         renderItem={renderWorker}
         contentContainerStyle={styles.list}
