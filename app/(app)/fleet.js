@@ -49,6 +49,7 @@ import { getDeviceId } from "../../src/services/Identity";
 import { startLiveTracking, rebindTrackerToLatestFleet } from "../../src/services/LiveTracker";
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import AlarmService from "../../src/services/AlarmService";
+import SOSAlertManager from "../../src/services/SOSAlertManager";
 
 // Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
 let SecureStore = null;
@@ -850,6 +851,14 @@ export default function FleetScreen() {
 
   const openLiveView = async (item) => {
     try {
+      // ✅ FIX (Step 1): Stop alarm and mark incident as engaged when guard opens Live View
+      const status = computeDisplayStatus(item);
+      if (status === "SOS" && item?.device_id) {
+        AlarmService.stopAlarm();
+        SOSAlertManager.setEngaged(item.device_id);
+        console.log("Fleet: Alarm stopped and SOS marked as engaged for", item.device_id);
+      }
+
       const url = buildLiveUrl(item?.device_id, item?.latitude, item?.longitude);
       await openUrl(url);
     } catch (e) {
