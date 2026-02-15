@@ -1500,7 +1500,12 @@ export default function FleetScreen() {
         // ✅ Reset boot flag to allow fresh boot on sign-in
         // NOTE: TOKEN_REFRESHED deliberately excluded — it caused boot storms
         initialBootDoneRef.current = false;
-        boot();
+
+        // ✅ FIX: Delay boot by 300ms to let Supabase finish updating session state.
+        // Without this, getSession() in boot() returns null and aborts, leaving fleet empty.
+        setTimeout(() => {
+          if (isMountedRef.current) boot();
+        }, 300);
       }
     });
 
