@@ -204,6 +204,14 @@ export default function AppLayout() {
     };
   }, []);
 
+  // ✅ FIX: Auto-acknowledge SOS when overlay appears to stop alarm immediately
+  useEffect(() => {
+    if (sosAlert?.deviceId) {
+      console.log("AppLayout: Auto-acknowledging SOS to stop alarm:", sosAlert.deviceId);
+      SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
+    }
+  }, [sosAlert?.deviceId]);
+
   // Handle SOS alert actions
   // ✅ FIX (Bug 6): After acknowledging one alert, show the next active alert if any
   const handleAcknowledge = useCallback(async () => {
