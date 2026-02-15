@@ -39,14 +39,34 @@ export default function WorkGuideScreen() {
         <View style={styles.introCard}>
           <Text style={styles.introTitle}>What is a Work Fleet?</Text>
           <Text style={styles.introText}>
-            A Work Fleet is designed for businesses to protect employees. Managers can
-            monitor team members' safety, track locations during work hours, and receive
-            instant SOS alerts from any team member.
+            A Work Fleet is designed for businesses to protect employees in the field,
+            on job sites, or during work hours. Managers can respond instantly to
+            emergencies, track team safety status, and coordinate help when needed.
+            Employees get immediate assistance when danger strikes.
           </Text>
         </View>
 
+        {/* Wake Words for ALL Users */}
+        <Text style={styles.sectionTitle}>🎤 VOICE-ACTIVATED SOS (ALL USERS)</Text>
+
+        <View style={styles.wakeWordCard}>
+          <Ionicons name="mic" size={24} color="#ef4444" />
+          <View style={styles.wakeWordContent}>
+            <Text style={styles.wakeWordTitle}>Emergency Voice Commands:</Text>
+            <Text style={styles.wakeWordPhrase}>• "I'm feeling sick"</Text>
+            <Text style={styles.wakeWordPhrase}>• "Where's the bathroom"</Text>
+            <Text style={styles.wakeWordPhrase}>• "Please stop"</Text>
+            <Text style={styles.wakeWordPhrase}>• "It might rain today"</Text>
+            <Text style={styles.wakeWordNote}>
+              ⚠️ Say the COMPLETE phrase for hands-free SOS activation. Works even if
+              phone is in pocket, toolbelt, or vehicle. Designed for situations where
+              you can't reach your phone safely.
+            </Text>
+          </View>
+        </View>
+
         {/* Manager vs Member */}
-        <Text style={styles.sectionTitle}>ROLES</Text>
+        <Text style={styles.sectionTitle}>ROLES IN WORK FLEET</Text>
 
         <View style={styles.roleCard}>
           <View style={[styles.roleIcon, styles.roleManager]}>
@@ -55,8 +75,9 @@ export default function WorkGuideScreen() {
           <View style={styles.roleContent}>
             <Text style={styles.roleTitle}>Fleet Manager (Owner)</Text>
             <Text style={styles.roleDesc}>
-              Can view all team members, access the Work Dashboard, see detailed
-              tracking history, and remove members from the fleet.
+              Can view all team members' SOS alerts, access Work Dashboard for
+              analytics, see location during emergencies, and manage team membership.
+              Responsible for coordinating emergency response.
             </Text>
           </View>
         </View>
@@ -66,16 +87,116 @@ export default function WorkGuideScreen() {
             <Ionicons name="person" size={24} color="#22c55e" />
           </View>
           <View style={styles.roleContent}>
-            <Text style={styles.roleTitle}>Team Member</Text>
+            <Text style={styles.roleTitle}>Team Member (Employee)</Text>
             <Text style={styles.roleDesc}>
-              Can see other team members' status, trigger SOS alerts, and send check-ins.
-              Cannot access the manager dashboard or remove members.
+              Can trigger SOS for emergencies, see other team members' SOS alerts, and
+              respond to coworker emergencies. Protected by instant alert system when
+              danger occurs.
             </Text>
           </View>
         </View>
 
-        {/* Features */}
-        <Text style={styles.sectionTitle}>MANAGER FEATURES</Text>
+        {/* SOS Activation for Workers */}
+        <Text style={styles.sectionTitle}>🚨 HOW EMPLOYEES TRIGGER SOS</Text>
+
+        <View style={styles.methodCard}>
+          <View style={styles.methodIcon}>
+            <Ionicons name="mic" size={20} color="#ef4444" />
+          </View>
+          <View style={styles.methodContent}>
+            <Text style={styles.methodTitle}>Voice Commands</Text>
+            <Text style={styles.methodDesc}>
+              Use wake phrases when hands are busy, injured, or phone is out of reach.
+              Ideal for field workers, drivers, and hazardous situations.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.methodCard}>
+          <View style={styles.methodIcon}>
+            <Ionicons name="radio-button-on" size={20} color="#ef4444" />
+          </View>
+          <View style={styles.methodContent}>
+            <Text style={styles.methodTitle}>SOS Button</Text>
+            <Text style={styles.methodDesc}>
+              Tap the red SOS button in-app or use floating overlay button (Android).
+              Fast activation when you have phone access.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.methodCard}>
+          <View style={styles.methodIcon}>
+            <Ionicons name="hand-left" size={20} color="#ef4444" />
+          </View>
+          <View style={styles.methodContent}>
+            <Text style={styles.methodTitle}>7-Tap Gesture</Text>
+            <Text style={styles.methodDesc}>
+              Discreet emergency signal - tap screen 7 times rapidly. Silent activation
+              for situations requiring discretion.
+            </Text>
+          </View>
+        </View>
+
+        {/* What Happens During Work SOS */}
+        <Text style={styles.sectionTitle}>⚡ WHAT HAPPENS DURING SOS</Text>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIcon}>
+            <Ionicons name="people" size={24} color="#ef4444" />
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Team-Wide Alert</Text>
+            <Text style={styles.featureDesc}>
+              ALL team members and managers get loud alarm with flashing red screen,
+              even on silent. Includes employee name and exact location for fast
+              response.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIcon}>
+            <Ionicons name="location" size={24} color="#22c55e" />
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>GPS Tracking</Text>
+            <Text style={styles.featureDesc}>
+              Employee's location updates every 5 seconds. Manager can track in
+              real-time on dashboard map. Stops when employee cancels SOS or situation
+              is resolved.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIcon}>
+            <Ionicons name="videocam" size={24} color="#3b82f6" />
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Live Video Feed</Text>
+            <Text style={styles.featureDesc}>
+              Camera starts streaming automatically. Managers can view live video to
+              assess the emergency, guide response teams, and document incidents.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIcon}>
+            <Ionicons name="battery-half" size={24} color="#f59e0b" />
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Battery & Status</Text>
+            <Text style={styles.featureDesc}>
+              Dashboard shows employee's battery level and GPS accuracy. Critical for
+              planning response and knowing if phone might die.
+            </Text>
+          </View>
+        </View>
+
+        {/* Manager Features */}
+        <Text style={styles.sectionTitle}>👔 MANAGER DASHBOARD FEATURES</Text>
 
         <View style={styles.featureCard}>
           <View style={styles.featureIcon}>
@@ -84,8 +205,8 @@ export default function WorkGuideScreen() {
           <View style={styles.featureContent}>
             <Text style={styles.featureTitle}>Work Dashboard</Text>
             <Text style={styles.featureDesc}>
-              Access detailed analytics, tracking history, and team status overview.
-              See who's on-site, traveling, or offline.
+              Access detailed team overview, SOS history, location tracking during
+              emergencies, and safety analytics. See who's on-site vs offline.
             </Text>
           </View>
         </View>
@@ -97,40 +218,52 @@ export default function WorkGuideScreen() {
           <View style={styles.featureContent}>
             <Text style={styles.featureTitle}>Team Management</Text>
             <Text style={styles.featureDesc}>
-              Add or remove team members. Share the work fleet invite code with new
-              employees to onboard them quickly.
+              Add employees by sharing work fleet code (starts with "W-"). Remove
+              inactive members. Monitor team size and membership status.
             </Text>
           </View>
         </View>
 
         <View style={styles.featureCard}>
           <View style={styles.featureIcon}>
-            <Ionicons name="time" size={24} color="#f59e0b" />
+            <Ionicons name="shield" size={24} color="#22c55e" />
           </View>
           <View style={styles.featureContent}>
-            <Text style={styles.featureTitle}>Location History</Text>
+            <Text style={styles.featureTitle}>Emergency Coordination</Text>
             <Text style={styles.featureDesc}>
-              Review past locations and movement patterns. Useful for verifying job
-              site visits and responding to incidents.
+              When SOS triggered, immediately see location, video, and status.
+              Coordinate with emergency services, dispatch help, or send nearby
+              coworkers to assist.
             </Text>
           </View>
         </View>
 
-        <View style={styles.featureCard}>
-          <View style={styles.featureIcon}>
-            <Ionicons name="warning" size={24} color="#ef4444" />
-          </View>
-          <View style={styles.featureContent}>
-            <Text style={styles.featureTitle}>Emergency Response</Text>
-            <Text style={styles.featureDesc}>
-              Receive instant SOS alerts from any team member. Get their exact location
-              and coordinate emergency response.
-            </Text>
-          </View>
+        {/* Privacy for Work Fleet */}
+        <Text style={styles.sectionTitle}>🔒 EMPLOYEE PRIVACY</Text>
+
+        <View style={styles.privacyCard}>
+          <Ionicons name="shield-checkmark" size={20} color="#22c55e" />
+          <Text style={styles.privacyText}>
+            <Text style={styles.privacyBold}>Location Privacy Protected:{"\n"}</Text>
+            • Employees' location is ONLY visible during active SOS{"\n"}
+            • NOT tracked during breaks, lunch, or off-hours{"\n"}
+            • Automatically stops sharing when SOS is cancelled{"\n"}
+            • Managers cannot see location during normal work unless SOS active
+          </Text>
+        </View>
+
+        <View style={styles.privacyCard}>
+          <Ionicons name="business" size={20} color="#3b82f6" />
+          <Text style={styles.privacyText}>
+            <Text style={styles.privacyBold}>Separate Fleets:{"\n"}</Text>
+            Employees can join BOTH work fleet and personal family fleet. Manager only
+            sees work fleet data. Family fleet remains completely private from
+            workplace.
+          </Text>
         </View>
 
         {/* Buttons Explained */}
-        <Text style={styles.sectionTitle}>DASHBOARD BUTTONS</Text>
+        <Text style={styles.sectionTitle}>📱 DASHBOARD BUTTONS (MANAGERS)</Text>
 
         <View style={styles.buttonGuide}>
           <View style={styles.buttonRow}>
@@ -140,7 +273,7 @@ export default function WorkGuideScreen() {
             <View style={styles.buttonInfo}>
               <Text style={styles.buttonName}>Work Dashboard</Text>
               <Text style={styles.buttonExplain}>
-                Opens the manager dashboard with team overview and analytics.
+                Opens manager dashboard with team overview, SOS alerts, and analytics.
               </Text>
             </View>
           </View>
@@ -152,82 +285,111 @@ export default function WorkGuideScreen() {
             <View style={styles.buttonInfo}>
               <Text style={styles.buttonName}>Share Work Code</Text>
               <Text style={styles.buttonExplain}>
-                Share the work fleet invite code to add new team members.
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.buttonRow}>
-            <View style={[styles.buttonDemo, styles.buttonGray]}>
-              <Ionicons name="swap-horizontal" size={16} color="#e2e8f0" />
-            </View>
-            <View style={styles.buttonInfo}>
-              <Text style={styles.buttonName}>Switch Fleet View</Text>
-              <Text style={styles.buttonExplain}>
-                Toggle between Work and Family fleet views on the Fleet Manager screen.
+                Share work fleet invite code (W-xxxxx) with new employees to add them.
               </Text>
             </View>
           </View>
 
           <View style={styles.buttonRow}>
             <View style={[styles.buttonDemo, styles.buttonRed]}>
-              <Ionicons name="remove-circle" size={16} color="#fee2e2" />
+              <Ionicons name="warning" size={16} color="#fee2e2" />
             </View>
             <View style={styles.buttonInfo}>
-              <Text style={styles.buttonName}>Remove Member</Text>
+              <Text style={styles.buttonName}>View SOS Alert</Text>
               <Text style={styles.buttonExplain}>
-                Long-press a member card to remove them from the work fleet (managers only).
+                When employee triggers SOS, tap to see live location, video, and status.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.buttonRow}>
+            <View style={[styles.buttonDemo, styles.buttonGray]}>
+              <Ionicons name="checkmark-circle" size={16} color="#e2e8f0" />
+            </View>
+            <View style={styles.buttonInfo}>
+              <Text style={styles.buttonName}>Acknowledge SOS</Text>
+              <Text style={styles.buttonExplain}>
+                Tap to stop alarm and let team know you're responding to emergency.
               </Text>
             </View>
           </View>
         </View>
 
         {/* Employee Section */}
-        <Text style={styles.sectionTitle}>FOR EMPLOYEES</Text>
+        <Text style={styles.sectionTitle}>👷 FOR EMPLOYEES</Text>
 
         <View style={styles.employeeCard}>
           <Ionicons name="information-circle" size={20} color="#3b82f6" />
           <Text style={styles.employeeText}>
-            If you're an employee joining a work fleet:{"\n\n"}
-            1. Get the invite code from your manager{"\n"}
-            2. Go to Fleet Manager and tap "Switch"{"\n"}
-            3. Enter the code and select "Work" fleet type{"\n"}
-            4. You'll now be visible to your manager during work hours
+            <Text style={styles.employeeBold}>Joining Your Work Fleet:{"\n\n"}</Text>
+            1. Get the invite code from your manager (starts with "W-"){"\n"}
+            2. Open app → Fleet Manager → tap "Switch Fleet"{"\n"}
+            3. Enter code and select "Work" as fleet type{"\n"}
+            4. Grant permissions (location, mic, camera, notifications){"\n"}
+            5. Test voice commands to ensure SOS works
           </Text>
         </View>
 
-        {/* Privacy Note */}
-        <View style={styles.privacyCard}>
-          <Ionicons name="shield" size={20} color="#f59e0b" />
-          <Text style={styles.privacyText}>
-            <Text style={styles.privacyBold}>Privacy Note: </Text>
-            Your manager can only see your location while you're in the work fleet.
-            You can join a separate Family fleet for personal use that your manager
-            cannot access.
+        <View style={styles.employeeCard}>
+          <Ionicons name="fitness" size={20} color="#22c55e" />
+          <Text style={styles.employeeText}>
+            <Text style={styles.employeeBold}>Using SOS at Work:{"\n\n"}</Text>
+            • Test wake words regularly so you're confident they work{"\n"}
+            • Keep phone charged - SOS drains battery faster{"\n"}
+            • Enable background location for instant alerts{"\n"}
+            • Practice cancelling false alarms (tap "Cancel SOS" in app){"\n"}
+            • Know that ALL team members will be alerted when you trigger SOS
           </Text>
         </View>
 
-        {/* Tips */}
-        <Text style={styles.sectionTitle}>MANAGER TIPS</Text>
+        {/* Important Tips */}
+        <Text style={styles.sectionTitle}>💡 CRITICAL SAFETY TIPS</Text>
 
         <View style={styles.tipCard}>
           <Ionicons name="bulb" size={18} color="#3b82f6" />
           <Text style={styles.tipText}>
-            Invite codes starting with "W-" are for Work fleets, "F-" for Family.
-          </Text>
-        </View>
-
-        <View style={styles.tipCard}>
-          <Ionicons name="bulb" size={18} color="#3b82f6" />
-          <Text style={styles.tipText}>
-            Check the Work Dashboard regularly to ensure all team members are checking in.
+            Managers: Respond to SOS alerts immediately. Delays can cost lives. Have an
+            emergency response plan ready.
           </Text>
         </View>
 
         <View style={styles.tipCard}>
           <Ionicons name="bulb" size={18} color="#3b82f6" />
           <Text style={styles.tipText}>
-            Remove inactive members to keep your fleet organized and easy to monitor.
+            Employees: Don't hesitate to trigger SOS if you feel unsafe. False alarm is
+            better than no alarm in a real emergency.
+          </Text>
+        </View>
+
+        <View style={styles.tipCard}>
+          <Ionicons name="bulb" size={18} color="#3b82f6" />
+          <Text style={styles.tipText}>
+            Test the system regularly during safety meetings. Make sure all employees
+            know the wake phrases and button locations.
+          </Text>
+        </View>
+
+        <View style={styles.tipCard}>
+          <Ionicons name="bulb" size={18} color="#3b82f6" />
+          <Text style={styles.tipText}>
+            Work fleet codes (W-) are separate from family codes (F-). Employees can
+            safely use both without workplace seeing personal data.
+          </Text>
+        </View>
+
+        <View style={styles.tipCard}>
+          <Ionicons name="bulb" size={18} color="#3b82f6" />
+          <Text style={styles.tipText}>
+            Battery monitoring is critical for field workers. Manager dashboard shows
+            battery levels - remind low-battery employees to charge.
+          </Text>
+        </View>
+
+        <View style={styles.tipCard}>
+          <Ionicons name="bulb" size={18} color="#3b82f6" />
+          <Text style={styles.tipText}>
+            Live video feed helps managers assess severity and coordinate response.
+            Explain to employees this is for their safety, not surveillance.
           </Text>
         </View>
 
@@ -303,6 +465,39 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     marginTop: 8,
   },
+  wakeWordCard: {
+    flexDirection: "row",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderWidth: 2,
+    borderColor: "rgba(239, 68, 68, 0.35)",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 20,
+    gap: 14,
+  },
+  wakeWordContent: {
+    flex: 1,
+  },
+  wakeWordTitle: {
+    color: "#fee2e2",
+    fontSize: 15,
+    fontWeight: "900",
+    marginBottom: 10,
+  },
+  wakeWordPhrase: {
+    color: "#fecaca",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 6,
+    letterSpacing: 0.3,
+  },
+  wakeWordNote: {
+    color: "#fca5a5",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+    fontStyle: "italic",
+  },
   roleCard: {
     flexDirection: "row",
     backgroundColor: "#1e293b",
@@ -338,6 +533,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
+  methodCard: {
+    flexDirection: "row",
+    backgroundColor: "#1e293b",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    gap: 12,
+  },
+  methodIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  methodContent: {
+    flex: 1,
+  },
+  methodTitle: {
+    color: "#e2e8f0",
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  methodDesc: {
+    color: "#94a3b8",
+    fontSize: 12,
+    lineHeight: 18,
+  },
   featureCard: {
     flexDirection: "row",
     backgroundColor: "#1e293b",
@@ -367,6 +592,27 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 13,
     lineHeight: 19,
+  },
+  privacyCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    backgroundColor: "rgba(34, 197, 94, 0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.25)",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  privacyText: {
+    flex: 1,
+    color: "#d1fae5",
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  privacyBold: {
+    fontWeight: "900",
+    color: "#86efac",
   },
   buttonGuide: {
     backgroundColor: "#1e293b",
@@ -437,25 +683,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
-  privacyCard: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-    backgroundColor: "rgba(245, 158, 11, 0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(245, 158, 11, 0.20)",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 24,
-  },
-  privacyText: {
-    flex: 1,
-    color: "#fef3c7",
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  privacyBold: {
-    fontWeight: "800",
+  employeeBold: {
+    fontWeight: "900",
+    color: "#93c5fd",
   },
   tipCard: {
     flexDirection: "row",
