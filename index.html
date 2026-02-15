@@ -1178,6 +1178,7 @@
 
     // Police scan state
     let policeScanInFlight = false;
+    let currentSOSLocation = null; // Store current SOS coords for accurate rescans
 
     // Agora state
     let agoraClient = null;
@@ -1964,15 +1965,18 @@
         await safeLeaveAgora();
         camTracks.front = null;
         remoteAudioTrack = null;
+        audioUnmuted = false; // Reset audio state when switching SOS
         showOverlay(true, 'CONNECTING TO SOS FEED...');
+        updateAudioButton(); // Update button to show muted state
         await startVideo();
 
         // Focus map on this member (map pan only — no recursion)
         const member = fleetMembers.find(m => m.deviceId === deviceId);
         if (member) focusOnMember(member);
 
-        // Trigger police scan for new location
+        // Store SOS location for accurate rescans
         if (member && member.latitude && member.longitude) {
+          currentSOSLocation = { lat: member.latitude, lng: member.longitude };
           setTimeout(() => scanForPolice(member.latitude, member.longitude), 500);
         }
       } finally {
@@ -2055,8 +2059,8 @@
     function initMap() {
       const initialCenter = HAS_URL_COORDS ? [URL_LNG, URL_LAT] : DEFAULT_CENTER;
 
-      // ✅ pull back ~10% vs previous
-      const initialZoom = HAS_URL_COORDS ? 19.0 : 13.6;
+      // ✅ Zoomed out 20% for better context view
+      const initialZoom = HAS_URL_COORDS ? 15.2 : 13.6;
 
       map = new maplibregl.Map({
         container: 'map',
@@ -2356,9 +2360,9 @@
 
       ensureMarker(lat, lng, mode, subline);
 
-      // ✅ slightly less aggressive zoom than before
+      // ✅ Zoomed out for neighborhood context
       if (map) {
-        const desiredZoom = 16.16;
+        const desiredZoom = 13.0;
         const currentZoom = Number(map.getZoom());
         const zoom = Number.isFinite(currentZoom) ? Math.max(currentZoom, desiredZoom) : desiredZoom;
 
@@ -2617,11 +2621,14 @@
       `;
 
       setTimeout(() => {
-        if (map) {
-          const c = map.getCenter();
-          scanForPolice(c.lat, c.lng);
+        // Use stored SOS location if available (most accurate)
+        if (currentSOSLocation) {
+          scanForPolice(currentSOSLocation.lat, currentSOSLocation.lng);
         } else if (HAS_URL_COORDS) {
           scanForPolice(URL_LAT, URL_LNG);
+        } else if (map) {
+          const c = map.getCenter();
+          scanForPolice(c.lat, c.lng);
         }
       }, 120);
     }

@@ -967,12 +967,12 @@ export default function AuthPage() {
 
           openModal({
             variant: "success",
-            title: "Confirm Your Email",
+            title: "Check Your Email",
             message:
               actionMode === "join"
-                ? "Account created!\n\nConfirm your email, then come back and LOG IN.\nAfter login, you’ll be linked to the fleet."
-                : "Account created!\n\nConfirm your email, then come back and LOG IN.\nAfter login, you must Create Fleet before continuing.",
-            primaryText: "OK",
+                ? "Account created successfully!\n\n1. Check your email and click the confirmation link\n2. You'll see a preview of your dashboard\n3. Return to THIS APP and log in with your credentials\n4. You'll be automatically linked to the fleet\n\nThe manager will see you once you're logged in."
+                : "Account created successfully!\n\n1. Check your email and click the confirmation link\n2. You'll see a preview of your dashboard\n3. Return to THIS APP and log in with your credentials\n4. You'll need to create your fleet to continue\n\nMake sure to complete these steps to activate your account.",
+            primaryText: "GOT IT",
           });
 
           resetAuthUiToLogin(setAuthMode, setActionMode, setPassword, setInviteCode);

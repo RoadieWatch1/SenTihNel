@@ -254,6 +254,8 @@ export default function AppLayout() {
         visible={sosAlert !== null}
         senderName={sosAlert?.displayName}
         senderDeviceId={sosAlert?.deviceId}
+        latitude={sosAlert?.latitude}
+        longitude={sosAlert?.longitude}
         onAcknowledge={handleAcknowledge}
         onViewLocation={handleViewLocation}
         onDismiss={handleDismiss}
