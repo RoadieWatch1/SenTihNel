@@ -29,14 +29,42 @@ const SOS_CHANNEL_ID = "sos_alerts";
 // NOTIFICATION HANDLER SETUP
 // ============================================
 
+// ✅ FIX: Check suppression before showing foreground notifications.
+// Import is deferred to avoid circular dependency (SOSAlertManager imports NotificationService).
+let _sosAlertManager = null;
+function getSOSAlertManager() {
+  if (!_sosAlertManager) {
+    try { _sosAlertManager = require("./SOSAlertManager").default; } catch {}
+  }
+  return _sosAlertManager;
+}
+
 // Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    priority: Notifications.AndroidNotificationPriority.MAX,
-  }),
+  handleNotification: async (notification) => {
+    // ✅ FIX: Suppress foreground notification banners for already-acknowledged SOS
+    const data = notification?.request?.content?.data;
+    if (data?.type === "sos" && data?.device_id) {
+      const mgr = getSOSAlertManager();
+      if (mgr?.isSuppressed?.(data.device_id)) {
+        console.log("NotificationService: Suppressing foreground notification for", data.device_id);
+        return {
+          shouldShowAlert: false,
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+        };
+      }
+    }
+
+    return {
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      priority: Notifications.AndroidNotificationPriority.MAX,
+    };
+  },
 });
 
 // ============================================

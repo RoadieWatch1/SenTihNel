@@ -3,10 +3,17 @@
 // Coordinates alarm, notifications, and UI overlay
 // Works on both iOS and Android
 //
-// ✅ FIX: Broadcast listeners on fleet:{groupId} channel (must match BatSignal sender)
+// ✅ GOLDEN RULE: Only the SOS SENDER can change their tracking_sessions.status.
+//    Receivers NEVER write sender status. Acknowledgment is LOCAL suppression only.
+//
+// ✅ FIX: Broadcast listeners on sos:{groupId} channel (must match BatSignal sender)
 // ✅ FIX: postgres_changes on SEPARATE db_watch channel (non-fatal if it fails)
 // ✅ FIX: Added retry on CHANNEL_ERROR with backoff
 // ✅ FIX: Check for resolved alerts when app resumes from background
+// ✅ FIX: Local suppression replaces DB write on acknowledge (stops alarm loop)
+// ✅ FIX: Centralized maybeRaiseAlarm prevents 5-channel stampede
+// ✅ FIX: Resume only restarts alarm for unsuppressed incidents
+// ✅ FIX: Multi-group init no longer spams stopAlarm
 
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -19,71 +26,105 @@ import NotificationService from "./NotificationService";
 // ============================================
 
 const ACTIVE_SOS_KEY = "sentinel_active_sos";
+const SUPPRESSED_KEY = "sentinel_suppressed_sos"; // ✅ Persisted suppression
 const MY_DEVICE_ID_KEY = "sentinel_device_id";
 
-// ✅ FIX: Retry config for channel connection
+// Retry config for channel connection
 const MAX_CHANNEL_RETRIES = 5;
 const INITIAL_RETRY_DELAY_MS = 2000;
 
-// ✅ FIX: Periodic DB poll interval when SOS alerts are active
-// Catches missed cancel broadcasts (e.g., WebSocket momentarily disconnected)
-const RESOLVED_POLL_INTERVAL_MS = 15_000; // Check every 15 seconds
+// Periodic DB poll interval when SOS alerts are active (unsuppressed only)
+const RESOLVED_POLL_INTERVAL_MS = 15_000;
 
 // ============================================
 // STATE
 // ============================================
 
 let isInitialized = false;
-let isInitializing = false; // ✅ FIX (Step 5): Prevent concurrent initialization
-let currentGroupIds = []; // ✅ Multi-group support
+let isInitializing = false;
+let currentGroupIds = [];
 let myDeviceId = null;
-let realtimeChannels = new Map(); // groupId -> channel (broadcast — critical)
-let dbWatchChannels = new Map(); // groupId -> channel (postgres_changes — backup)
-let channelRetryTimers = new Map(); // groupId -> timer
-let channelRetryCounts = new Map(); // groupId -> count
+let realtimeChannels = new Map(); // groupId -> channel (broadcast)
+let dbWatchChannels = new Map(); // groupId -> channel (postgres_changes backup)
+let channelRetryTimers = new Map();
+let channelRetryCounts = new Map();
 let appStateSubscription = null;
 let notificationSubscriptions = [];
-let resolvedPollTimer = null; // ✅ Periodic DB poll for missed cancel broadcasts
+let resolvedPollTimer = null;
 
 // Callbacks for UI updates
 let onSOSReceived = null; // (sosData) => void
 let onSOSCancelled = null; // (deviceId) => void
 let onSOSAcknowledged = null; // (deviceId, byDeviceId) => void
 
-// Track active SOS alerts
+// Track active SOS alerts (truth from sender's DB status)
 let activeSOSAlerts = new Map(); // deviceId -> sosData
 
-// ✅ Track engaged/acknowledged SOS (prevents re-alarming while in Live View)
-let engagedIncidents = new Map(); // incidentKey -> timestamp
+// ✅ LOCAL SUPPRESSION: Receiver-side "I saw it, stop alarming me"
+// Key = deviceId (one active SOS per device at a time)
+// Cleared ONLY when sender actually cancels SOS
+let suppressedIncidents = new Map(); // deviceId -> { suppressedAt, suppressedBy }
 
-// ✅ FIX (Step 2): Track handled incidents to prevent duplicate alarm triggers
-// If same SOS broadcast received multiple times (retries, network delays), ignore duplicates
+// Deduplication: prevent same broadcast from triggering alarm twice
 let handledIncidents = new Map(); // incidentKey -> timestamp
-const HANDLED_INCIDENT_TTL_MS = 5 * 60 * 1000; // Keep for 5 minutes then auto-cleanup
+const HANDLED_INCIDENT_TTL_MS = 5 * 60 * 1000;
+
+// ============================================
+// SUPPRESSION PERSISTENCE
+// ============================================
+
+async function saveSuppressed() {
+  try {
+    const entries = Array.from(suppressedIncidents.entries());
+    await AsyncStorage.setItem(SUPPRESSED_KEY, JSON.stringify(entries));
+  } catch (e) {
+    console.log("SOSAlertManager: Failed to save suppressed incidents", e);
+  }
+}
+
+async function loadSuppressed() {
+  try {
+    const stored = await AsyncStorage.getItem(SUPPRESSED_KEY);
+    if (stored) {
+      suppressedIncidents = new Map(JSON.parse(stored));
+    }
+  } catch (e) {
+    console.log("SOSAlertManager: Failed to load suppressed incidents", e);
+  }
+}
+
+/**
+ * Clear suppression for a device (called when sender cancels SOS)
+ */
+function clearSuppression(deviceId) {
+  if (suppressedIncidents.has(deviceId)) {
+    console.log("SOSAlertManager: Clearing suppression for", deviceId, "(SOS cancelled by sender)");
+    suppressedIncidents.delete(deviceId);
+    saveSuppressed().catch(() => {});
+  }
+}
+
+/**
+ * Check if incident is suppressed on this device
+ */
+function isSuppressed(deviceId) {
+  return suppressedIncidents.has(deviceId);
+}
 
 // ============================================
 // INITIALIZATION
 // ============================================
 
-/**
- * Initialize the SOS Alert Manager
- * Call this once when app starts (in _layout.js or App.js)
- * ✅ Now accepts an array of groupIds to listen on ALL user fleets
- * Also accepts a single groupId string for backwards compatibility
- */
 async function initialize(groupIds, deviceId, callbacks = {}) {
-  // Normalize: accept single string or array
   const ids = Array.from(new Set(
     (Array.isArray(groupIds) ? groupIds : [groupIds]).filter(Boolean).map(String)
   ));
 
-  // ✅ FIX (Step 5): Prevent concurrent initialization (race condition guard)
   if (isInitializing) {
     console.log("SOSAlertManager: Already initializing, skipping duplicate call");
     return;
   }
 
-  // Check if already initialized with same groups
   if (isInitialized && JSON.stringify(currentGroupIds.sort()) === JSON.stringify(ids.sort())) {
     console.log("SOSAlertManager: Already initialized for these groups");
     return;
@@ -93,15 +134,17 @@ async function initialize(groupIds, deviceId, callbacks = {}) {
   console.log("SOSAlertManager: Initializing for", ids.length, "groups:", ids.map(g => g?.slice(0, 8)));
 
   try {
-    // Store references
     currentGroupIds = ids;
     myDeviceId = deviceId || (await AsyncStorage.getItem(MY_DEVICE_ID_KEY));
     onSOSReceived = callbacks.onSOSReceived || null;
     onSOSCancelled = callbacks.onSOSCancelled || null;
     onSOSAcknowledged = callbacks.onSOSAcknowledged || null;
 
-    // Cleanup any existing subscriptions
+    // Cleanup existing subscriptions (but preserve suppression state)
     await cleanup();
+
+    // ✅ Load persisted suppression state (survives app restart)
+    await loadSuppressed();
 
     // Register push tokens for ALL groups
     const pushToken = await NotificationService.registerForPushNotifications();
@@ -111,96 +154,69 @@ async function initialize(groupIds, deviceId, callbacks = {}) {
       }
     }
 
-    // ✅ Subscribe to broadcast + DB changes for EACH group
+    // Subscribe to broadcast + DB changes for EACH group
     for (const gid of ids) {
       subscribeToRealtimeChannel(gid);
       subscribeToDbWatchChannel(gid);
     }
 
-    // Listen for app state changes
     setupAppStateListener();
-
-    // Setup notification response listeners
     setupNotificationListeners();
 
-    // Check for any active SOS alerts we might have missed (all groups)
-    for (const gid of ids) {
-      await checkForActiveSOSAlerts(gid);
-    }
+    // Check for active SOS alerts across all groups (batched, no per-group alarm spam)
+    await checkAllGroupsForActiveAlerts(ids);
 
     isInitialized = true;
     console.log("SOSAlertManager: Initialized successfully for", ids.length, "groups");
   } finally {
-    // ✅ FIX (Step 5): Always release initialization lock, even if initialization fails
     isInitializing = false;
   }
 }
 
-/**
- * Cleanup all subscriptions
- */
 async function cleanup() {
   console.log("SOSAlertManager: Cleaning up");
 
-  // Clear all retry timers
-  for (const [, timer] of channelRetryTimers) {
-    clearTimeout(timer);
-  }
+  for (const [, timer] of channelRetryTimers) clearTimeout(timer);
   channelRetryTimers.clear();
   channelRetryCounts.clear();
 
-  // ✅ Clear resolved-alert polling timer
   stopResolvedPoll();
 
-  // Remove all realtime channels
   for (const [, ch] of realtimeChannels) {
     try { await supabase.removeChannel(ch); } catch {}
   }
   realtimeChannels.clear();
 
-  // Remove all DB watch channels
   for (const [, ch] of dbWatchChannels) {
     try { await supabase.removeChannel(ch); } catch {}
   }
   dbWatchChannels.clear();
 
-  // Remove app state subscription
   if (appStateSubscription) {
     appStateSubscription.remove();
     appStateSubscription = null;
   }
 
-  // Remove notification subscriptions
   notificationSubscriptions.forEach((sub) => sub.remove());
   notificationSubscriptions = [];
 
-  // Stop any playing alarm
   await AlarmService.stopAlarm();
 
-  // ✅ Clear deduplication and engagement tracking
   handledIncidents.clear();
-  engagedIncidents.clear();
+  // ✅ NOTE: We do NOT clear suppressedIncidents on cleanup.
+  // Suppression persists until sender cancels SOS.
 
   isInitialized = false;
-  isInitializing = false; // ✅ FIX (Step 5): Release initialization lock
+  isInitializing = false;
 }
 
 // ============================================
 // REALTIME SUBSCRIPTIONS
 // ============================================
 
-/**
- * ✅ FIX: Subscribe to broadcast events ONLY on the main channel
- * - MUST use same channel name as BatSignal sender (fleet:{groupId}) for broadcasts to work
- * - postgres_changes is on a SEPARATE channel so it can't take down broadcasts if it fails
- * - Retries on CHANNEL_ERROR with backoff
- */
 function subscribeToRealtimeChannel(groupId) {
-  // MUST match the channel name used in BatSignal.js tryBroadcastSOS/tryBroadcastCancel
-  // ✅ FIX #1: Changed to sos: prefix to avoid collision with fleet_ui channel
   const channelName = `sos:${groupId}`;
 
-  // Build channel with ONLY broadcast listeners (no postgres_changes)
   const channel = supabase
     .channel(channelName)
     .on("broadcast", { event: "sos" }, (payload) => {
@@ -213,13 +229,12 @@ function subscribeToRealtimeChannel(groupId) {
       handleSOSAcknowledgeBroadcast(payload.payload);
     });
 
-  // Subscribe with retry logic
   channel.subscribe((status) => {
     console.log("SOSAlertManager: Broadcast channel status:", status, "for", groupId?.slice(0, 8));
 
     if (status === "SUBSCRIBED") {
       console.log("SOSAlertManager: Broadcast channel connected for", groupId?.slice(0, 8));
-      channelRetryCounts.set(groupId, 0); // Reset on success
+      channelRetryCounts.set(groupId, 0);
     }
 
     if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
@@ -231,14 +246,7 @@ function subscribeToRealtimeChannel(groupId) {
   realtimeChannels.set(groupId, channel);
 }
 
-/**
- * ✅ Subscribe to postgres_changes on a SEPARATE channel (best-effort backup)
- * If this fails (e.g., Realtime not enabled on tracking_sessions table), the broadcast
- * channel keeps working. This is just an extra safety net for catching SOS status changes
- * that happen via direct DB writes (not through broadcast).
- */
 function subscribeToDbWatchChannel(groupId) {
-  // Use a different channel name so it doesn't conflict with the broadcast channel
   const channelName = `db_watch:${groupId}`;
 
   try {
@@ -255,12 +263,10 @@ function subscribeToDbWatchChannel(groupId) {
         (payload) => {
           const { new: newRow, old: oldRow } = payload;
 
-          // Check if status changed to SOS
           if (newRow.status === "SOS" && oldRow?.status !== "SOS") {
             handleSOSStatusChange(newRow);
           }
 
-          // Check if status changed from SOS (cancelled)
           if (oldRow?.status === "SOS" && newRow.status !== "SOS") {
             handleSOSCancelledStatusChange(newRow);
           }
@@ -275,21 +281,16 @@ function subscribeToDbWatchChannel(groupId) {
       }
 
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        // Non-fatal: broadcast channel is the primary, this is just a backup
         console.log("SOSAlertManager: DB watch channel failed (non-fatal, broadcast still active)");
       }
     });
 
     dbWatchChannels.set(groupId, channel);
   } catch (e) {
-    // Complete failure is non-fatal — broadcast handles the critical path
     console.log("SOSAlertManager: DB watch setup failed (non-fatal):", e?.message || e);
   }
 }
 
-/**
- * ✅ FIX: Retry channel connection with exponential backoff
- */
 function scheduleChannelRetry(groupId) {
   const retryCount = channelRetryCounts.get(groupId) || 0;
   if (retryCount >= MAX_CHANNEL_RETRIES) {
@@ -297,7 +298,6 @@ function scheduleChannelRetry(groupId) {
     return;
   }
 
-  // Clear any existing timer for this group
   const existingTimer = channelRetryTimers.get(groupId);
   if (existingTimer) clearTimeout(existingTimer);
 
@@ -310,14 +310,12 @@ function scheduleChannelRetry(groupId) {
   const timer = setTimeout(async () => {
     channelRetryTimers.delete(groupId);
 
-    // Remove old channel for this group
     const oldCh = realtimeChannels.get(groupId);
     if (oldCh) {
       try { await supabase.removeChannel(oldCh); } catch {}
       realtimeChannels.delete(groupId);
     }
 
-    // Re-subscribe if this group is still in our list
     if (currentGroupIds.includes(groupId)) {
       subscribeToRealtimeChannel(groupId);
     }
@@ -327,62 +325,67 @@ function scheduleChannelRetry(groupId) {
 }
 
 // ============================================
-// SOS EVENT HANDLERS
+// CENTRALIZED ALARM GATE (prevents 5-channel stampede)
 // ============================================
 
 /**
- * Handle incoming SOS broadcast
+ * ✅ Single entry point for raising alarm + overlay.
+ * All channels (broadcast, postgres_changes, DB poll, push notification)
+ * must go through this function. It checks:
+ * 1. Not our own device
+ * 2. Not already handled (dedup)
+ * 3. Not suppressed (user already acknowledged this incident)
+ * Returns true if alarm was raised, false if suppressed/deduped.
  */
-async function handleSOSBroadcast(sosData) {
+async function maybeRaiseAlarm(sosData) {
   const { device_id, display_name, latitude, longitude, timestamp } = sosData;
-
-  console.log("🚨 SOSAlertManager: SOS received from", device_id);
 
   // Don't alert for our own SOS
   if (device_id === myDeviceId) {
-    console.log("SOSAlertManager: Ignoring own SOS");
-    return;
+    return false;
   }
 
-  // ✅ FIX (Step 2): Deduplication - ignore if we already handled this exact incident
-  // Prevents duplicate alarms from retry broadcasts, network delays, or multi-fleet spam
-  const incidentKey = `${device_id}:${timestamp || Date.now()}`;
-  if (handledIncidents.has(incidentKey)) {
-    console.log("SOSAlertManager: Duplicate SOS ignored (already handled)", incidentKey);
-    return;
+  // ✅ SUPPRESSION CHECK: If receiver already acknowledged this incident, no alarm
+  if (isSuppressed(device_id)) {
+    console.log("SOSAlertManager: Incident suppressed for", device_id, "- no alarm");
+    // Still track as active (truth from sender) but don't alarm
+    if (!activeSOSAlerts.has(device_id)) {
+      activeSOSAlerts.set(device_id, { ...sosData, receivedAt: Date.now() });
+      await saveActiveAlerts();
+    }
+    return false;
   }
 
-  // ✅ FIX (Step 1): Check if this incident is already engaged (guard in Live View)
-  if (engagedIncidents.has(incidentKey)) {
-    console.log("SOSAlertManager: Incident already engaged - suppressing alarm", incidentKey);
-    return;
+  // Deduplication: don't re-alarm for same broadcast received multiple times
+  const dedupeKey = `${device_id}:${timestamp || "none"}`;
+  if (handledIncidents.has(dedupeKey)) {
+    console.log("SOSAlertManager: Duplicate SOS ignored (already handled)", dedupeKey);
+    return false;
   }
 
-  // ✅ FIX (Step 2): Mark incident as handled to prevent duplicate processing
-  handledIncidents.set(incidentKey, Date.now());
-  cleanupOldHandledIncidents(); // Periodic cleanup to prevent memory leak
+  // Already alarming for this device
+  if (activeSOSAlerts.has(device_id)) {
+    console.log("SOSAlertManager: Already tracking active alert for", device_id);
+    return false;
+  }
 
-  // Store active SOS
+  // Mark as handled
+  handledIncidents.set(dedupeKey, Date.now());
+  cleanupOldHandledIncidents();
+
+  // Store active SOS (truth: sender is in SOS)
   activeSOSAlerts.set(device_id, {
     ...sosData,
     receivedAt: Date.now(),
-    incidentKey, // Store incident key for tracking
   });
-
-  // Save to AsyncStorage for persistence
   await saveActiveAlerts();
 
-  // Get app state
+  // ✅ RAISE ALARM
   const appState = AppState.currentState;
-
-  // ✅ FIX: Always start alarm (sound + vibration) regardless of app state.
-  // AlarmService uses staysActiveInBackground: true, so it can play in background.
-  // Previously only foreground got the alarm — background users got silent vibration only.
-  console.log("SOSAlertManager: Starting alarm (appState:", appState, ")");
+  console.log("🚨 SOSAlertManager: Raising alarm for", device_id, "(appState:", appState, ")");
   await AlarmService.startAlarm();
 
   if (appState !== "active") {
-    // App is in background - also show push notification as fallback
     console.log("SOSAlertManager: App backgrounded - showing notification");
     await NotificationService.showSOSNotification(
       display_name || `Device ${device_id?.slice(0, 8)}`,
@@ -390,10 +393,10 @@ async function handleSOSBroadcast(sosData) {
     );
   }
 
-  // ✅ FIX: Start polling DB for resolved alerts (catches missed cancel broadcasts)
+  // Start polling for resolved alerts
   startResolvedPoll();
 
-  // Notify UI callback
+  // Notify UI callback (shows overlay)
   if (onSOSReceived) {
     onSOSReceived({
       deviceId: device_id,
@@ -403,18 +406,21 @@ async function handleSOSBroadcast(sosData) {
       timestamp,
     });
   }
+
+  return true;
 }
 
-/**
- * Handle SOS status change from database
- */
-async function handleSOSStatusChange(row) {
-  // Only process if we don't already have this alert (prevents duplicates)
-  if (activeSOSAlerts.has(row.device_id)) {
-    return;
-  }
+// ============================================
+// SOS EVENT HANDLERS
+// ============================================
 
-  await handleSOSBroadcast({
+async function handleSOSBroadcast(sosData) {
+  console.log("🚨 SOSAlertManager: SOS received from", sosData?.device_id);
+  await maybeRaiseAlarm(sosData);
+}
+
+async function handleSOSStatusChange(row) {
+  await maybeRaiseAlarm({
     device_id: row.device_id,
     display_name: row.display_name,
     latitude: row.latitude,
@@ -425,19 +431,22 @@ async function handleSOSStatusChange(row) {
 }
 
 /**
- * Handle SOS cancel broadcast
+ * Handle SOS cancel broadcast (sender cancelled their SOS)
  */
 async function handleSOSCancelBroadcast(data) {
   const { device_id } = data;
 
-  console.log("SOSAlertManager: SOS cancelled for", device_id);
+  console.log("SOSAlertManager: SOS cancelled by sender for", device_id);
+
+  // ✅ Clear suppression - incident is over, next SOS from same device should alarm
+  clearSuppression(device_id);
 
   // Remove from active alerts
   activeSOSAlerts.delete(device_id);
   await saveActiveAlerts();
 
-  // Stop alarm + polling if no more active alerts
-  if (activeSOSAlerts.size === 0) {
+  // Stop alarm + polling if no more UNSUPPRESSED active alerts
+  if (!hasUnsuppressedAlerts()) {
     await AlarmService.stopAlarm();
     stopResolvedPoll();
   }
@@ -447,15 +456,12 @@ async function handleSOSCancelBroadcast(data) {
     data.display_name || `Device ${device_id?.slice(0, 8)}`
   );
 
-  // Notify UI callback
+  // Notify UI callback (hides overlay)
   if (onSOSCancelled) {
     onSOSCancelled(device_id);
   }
 }
 
-/**
- * Handle SOS cancelled from database status change
- */
 async function handleSOSCancelledStatusChange(row) {
   await handleSOSCancelBroadcast({
     device_id: row.device_id,
@@ -463,15 +469,9 @@ async function handleSOSCancelledStatusChange(row) {
   });
 }
 
-/**
- * Handle SOS acknowledge broadcast
- */
 function handleSOSAcknowledgeBroadcast(data) {
   const { device_id, acknowledged_by } = data;
-
   console.log("SOSAlertManager: SOS acknowledged for", device_id, "by", acknowledged_by);
-
-  // Notify UI callback
   if (onSOSAcknowledged) {
     onSOSAcknowledged(device_id, acknowledged_by);
   }
@@ -481,12 +481,7 @@ function handleSOSAcknowledgeBroadcast(data) {
 // APP STATE HANDLING
 // ============================================
 
-/**
- * Setup app state change listener
- * ✅ FIX (Step 5): Guard against duplicate listeners
- */
 function setupAppStateListener() {
-  // Don't create duplicate listener if one already exists
   if (appStateSubscription) {
     console.log("SOSAlertManager: App state listener already exists, skipping");
     return;
@@ -496,24 +491,20 @@ function setupAppStateListener() {
     console.log("SOSAlertManager: App state changed to", nextState);
 
     if (nextState === "active") {
-      // App came to foreground
-      // ✅ Re-check database for SOS status changes we may have missed while backgrounded
-      for (const gid of currentGroupIds) {
-        await checkForActiveSOSAlerts(gid);
-        await checkForResolvedAlerts(gid);
-      }
+      // Re-check database for SOS status changes we may have missed
+      await checkAllGroupsForActiveAlerts(currentGroupIds);
 
-      // ✅ Always reconnect channels on foreground resume (all groups).
+      // Reconnect channels on foreground resume
       if (currentGroupIds.length > 0) {
         console.log("SOSAlertManager: Reconnecting channels on app resume");
         channelRetryCounts.clear();
 
-        for (const [gid, ch] of realtimeChannels) {
+        for (const [, ch] of realtimeChannels) {
           try { await supabase.removeChannel(ch); } catch {}
         }
         realtimeChannels.clear();
 
-        for (const [gid, ch] of dbWatchChannels) {
+        for (const [, ch] of dbWatchChannels) {
           try { await supabase.removeChannel(ch); } catch {}
         }
         dbWatchChannels.clear();
@@ -524,52 +515,45 @@ function setupAppStateListener() {
         }
       }
 
-      // Check if there are active SOS alerts
-      if (activeSOSAlerts.size > 0) {
-        // Start alarm for any active alerts
+      // ✅ FIX: Only restart alarm if there are UNSUPPRESSED active alerts
+      if (hasUnsuppressedAlerts()) {
+        console.log("SOSAlertManager: Unsuppressed alerts exist, restarting alarm on resume");
         await AlarmService.startAlarm();
       }
 
-      // Clear notifications since user is now in app
       await NotificationService.clearAllNotifications();
-    } else if (nextState === "background") {
-      // App going to background
-      // Alarm continues, notifications take over for new alerts
     }
   });
 }
 
-/**
- * Setup notification response listeners
- * ✅ FIX (Step 5): Guard against duplicate listeners
- */
 function setupNotificationListeners() {
-  // Don't create duplicate listeners if they already exist
   if (notificationSubscriptions.length > 0) {
     console.log("SOSAlertManager: Notification listeners already exist, skipping");
     return;
   }
 
-  // Handle notification received in foreground
   const receivedSub = NotificationService.addNotificationReceivedListener(
     (notification) => {
+      // ✅ FIX: Check if this SOS is suppressed before logging
+      const data = notification?.request?.content?.data;
+      if (data?.type === "sos" && data?.device_id && isSuppressed(data.device_id)) {
+        console.log("SOSAlertManager: Foreground notification suppressed for", data.device_id);
+        return;
+      }
       console.log("SOSAlertManager: Notification received in foreground");
-      // Don't need to do anything - realtime should have handled it
     }
   );
 
-  // Handle notification tap
   const responseSub = NotificationService.addNotificationResponseListener(
     async (response) => {
       console.log("SOSAlertManager: Notification tapped");
       const data = response.notification.request.content.data;
 
       if (data?.type === "sos" && data?.device_id) {
-        // ✅ FIX: Stop alarm when user taps "View" to acknowledge the SOS
-        console.log("SOSAlertManager: User viewed SOS - acknowledging alert");
-        await acknowledgeAlert(data.device_id);
+        // ✅ FIX: Suppress locally instead of writing to DB
+        console.log("SOSAlertManager: User tapped SOS notification - suppressing locally");
+        await suppressIncident(data.device_id);
 
-        // User tapped SOS notification - trigger UI callback
         if (onSOSReceived) {
           onSOSReceived({
             deviceId: data.device_id,
@@ -590,9 +574,6 @@ function setupNotificationListeners() {
 // PERSISTENCE
 // ============================================
 
-/**
- * Save active alerts to AsyncStorage
- */
 async function saveActiveAlerts() {
   try {
     const alerts = Array.from(activeSOSAlerts.entries());
@@ -602,102 +583,141 @@ async function saveActiveAlerts() {
   }
 }
 
-/**
- * Load active alerts from AsyncStorage
- */
 async function loadActiveAlerts() {
   try {
     const stored = await AsyncStorage.getItem(ACTIVE_SOS_KEY);
     if (stored) {
-      const alerts = JSON.parse(stored);
-      activeSOSAlerts = new Map(alerts);
+      activeSOSAlerts = new Map(JSON.parse(stored));
     }
   } catch (e) {
     console.log("SOSAlertManager: Failed to load active alerts", e);
   }
 }
 
+// ============================================
+// BATCHED GROUP CHECK (replaces per-group spam)
+// ============================================
+
 /**
- * Check for any active SOS alerts in the database
+ * ✅ FIX: Check all groups in one pass, then make ONE alarm decision at the end.
+ * Prevents per-group stopAlarm/onSOSCancelled spam during init.
  */
-async function checkForActiveSOSAlerts(groupId) {
+async function checkAllGroupsForActiveAlerts(groupIds) {
   try {
-    // Load persisted alerts first
     await loadActiveAlerts();
+    await loadSuppressed();
 
-    // Query database for current SOS statuses
-    const { data, error } = await supabase
-      .from('tracking_sessions_with_name')
-      .select("device_id, display_name, latitude, longitude, status, last_updated")
-      .eq("group_id", groupId)
-      .eq("status", "SOS");
+    // Collect all active SOS devices across all groups
+    const dbActiveDevices = new Set(); // deviceIds still in SOS in DB
 
-    if (error) {
-      console.log("SOSAlertManager: Failed to check active SOS", error);
+    for (const groupId of groupIds) {
+      const { data, error } = await supabase
+        .from('tracking_sessions_with_name')
+        .select("device_id, display_name, latitude, longitude, status, last_updated")
+        .eq("group_id", groupId)
+        .eq("status", "SOS");
+
+      if (error) {
+        console.log("SOSAlertManager: Failed to check active SOS for group", groupId?.slice(0, 8), error);
+        continue;
+      }
+
+      if (data && data.length > 0) {
+        for (const row of data) {
+          if (row.device_id === myDeviceId) continue;
+          dbActiveDevices.add(row.device_id);
+
+          // Add to active alerts if not already there
+          if (!activeSOSAlerts.has(row.device_id)) {
+            // Use maybeRaiseAlarm (checks suppression + dedup)
+            await maybeRaiseAlarm({
+              device_id: row.device_id,
+              display_name: row.display_name,
+              latitude: row.latitude,
+              longitude: row.longitude,
+              timestamp: row.last_updated,
+              group_id: groupId,
+            });
+          }
+        }
+      }
+    }
+
+    // Clear stale alerts: devices that are no longer in SOS in any group
+    let removedAny = false;
+    for (const [deviceId] of activeSOSAlerts) {
+      if (!dbActiveDevices.has(deviceId)) {
+        console.log("SOSAlertManager: Clearing stale alert for", deviceId);
+        activeSOSAlerts.delete(deviceId);
+        clearSuppression(deviceId); // Also clear suppression for resolved incidents
+        removedAny = true;
+        if (onSOSCancelled) onSOSCancelled(deviceId);
+      }
+    }
+
+    if (removedAny) {
+      await saveActiveAlerts();
+    }
+
+    // ✅ FIX: Single alarm decision AFTER all groups checked
+    if (!hasUnsuppressedAlerts()) {
+      // No unsuppressed alerts - make sure alarm is off (ONE call, not per-group)
+      if (AlarmService.isPlaying()) {
+        await AlarmService.stopAlarm();
+      }
+      stopResolvedPoll();
+    }
+  } catch (e) {
+    console.log("SOSAlertManager: Error checking all groups for active SOS", e);
+  }
+}
+
+// ============================================
+// RESOLVED-ALERT POLLING
+// ============================================
+
+function startResolvedPoll() {
+  if (resolvedPollTimer) return;
+  if (currentGroupIds.length === 0) return;
+
+  // ✅ FIX: Don't start polling if all alerts are suppressed
+  if (!hasUnsuppressedAlerts()) return;
+
+  console.log("SOSAlertManager: Starting resolved-alert polling");
+  resolvedPollTimer = setInterval(async () => {
+    if (activeSOSAlerts.size === 0) {
+      stopResolvedPoll();
       return;
     }
 
-    if (data && data.length > 0) {
-      console.log("SOSAlertManager: Found", data.length, "active SOS alerts in group", groupId?.slice(0, 8));
-
-      for (const row of data) {
-        // Don't alert for our own SOS
-        if (row.device_id === myDeviceId) continue;
-
-        // Add to active alerts if not already there
-        if (!activeSOSAlerts.has(row.device_id)) {
-          await handleSOSBroadcast({
-            device_id: row.device_id,
-            display_name: row.display_name,
-            latitude: row.latitude,
-            longitude: row.longitude,
-            timestamp: row.last_updated,
-            group_id: groupId,
-          });
-        }
-      }
-    } else {
-      // ✅ FIX (Bug 3): Only clear alerts that belong to THIS group, not all groups.
-      // Previously, checking a "quiet" fleet cleared alerts from the "active" fleet.
-      let removedAny = false;
-      for (const [deviceId, alertData] of activeSOSAlerts) {
-        if (alertData.group_id === groupId) {
-          console.log("SOSAlertManager: Clearing stale alert for", deviceId, "in group", groupId?.slice(0, 8));
-          activeSOSAlerts.delete(deviceId);
-          removedAny = true;
-          if (onSOSCancelled) onSOSCancelled(deviceId);
-        }
-      }
-
-      if (removedAny) {
-        await saveActiveAlerts();
-      }
-
-      // Stop alarm + polling only if NO alerts remain across ANY group
-      if (activeSOSAlerts.size === 0) {
-        await AlarmService.stopAlarm();
-        stopResolvedPoll();
-        if (!removedAny && onSOSCancelled) {
-          onSOSCancelled(null);
-        }
-      }
+    // ✅ FIX: Stop polling if all remaining alerts are suppressed
+    if (!hasUnsuppressedAlerts()) {
+      console.log("SOSAlertManager: All alerts suppressed - pausing resolved-alert polling");
+      stopResolvedPoll();
+      return;
     }
-  } catch (e) {
-    console.log("SOSAlertManager: Error checking active SOS", e);
+
+    for (const gid of currentGroupIds) {
+      await checkForResolvedAlerts(gid);
+    }
+  }, RESOLVED_POLL_INTERVAL_MS);
+}
+
+function stopResolvedPoll() {
+  if (resolvedPollTimer) {
+    clearInterval(resolvedPollTimer);
+    resolvedPollTimer = null;
+    console.log("SOSAlertManager: Stopped resolved-alert polling");
   }
 }
 
 /**
- * ✅ FIX: Check if any active SOS alerts have been resolved while app was backgrounded
- * This catches cancel events that were missed because the WebSocket was inactive
+ * Check if any active SOS alerts have been resolved
  */
 async function checkForResolvedAlerts(groupId) {
   try {
     if (activeSOSAlerts.size === 0) return;
 
-    // ✅ FIX (Bug 4): Only check devices whose alert belongs to THIS group.
-    // Previously, all active device IDs were checked against one group's DB,
-    // causing cross-group alerts to be falsely cancelled.
     const activeDeviceIds = Array.from(activeSOSAlerts.entries())
       .filter(([, data]) => data.group_id === groupId)
       .map(([deviceId]) => deviceId);
@@ -715,12 +735,11 @@ async function checkForResolvedAlerts(groupId) {
       return;
     }
 
-    // Find devices that are no longer in SOS
     const stillSOS = new Set((data || []).filter(r => r.status === "SOS").map(r => r.device_id));
 
     for (const deviceId of activeDeviceIds) {
       if (!stillSOS.has(deviceId)) {
-        console.log("SOSAlertManager: Alert resolved while backgrounded for", deviceId);
+        console.log("SOSAlertManager: Alert resolved (sender cancelled) for", deviceId);
         const alertData = activeSOSAlerts.get(deviceId);
         await handleSOSCancelBroadcast({
           device_id: deviceId,
@@ -734,63 +753,9 @@ async function checkForResolvedAlerts(groupId) {
 }
 
 // ============================================
-// RESOLVED-ALERT POLLING
-// ============================================
-
-/**
- * ✅ FIX: Start periodic DB polling to catch missed SOS cancel broadcasts.
- * When a cancel broadcast is missed (WebSocket momentary disconnect), the overlay
- * stays forever. This poll checks the DB every 15s while alerts are active.
- * ✅ FIX (Step 4): Stop polling if all active alerts are engaged (guard in Live View)
- */
-function startResolvedPoll() {
-  if (resolvedPollTimer) return; // Already running
-  if (currentGroupIds.length === 0) return;
-
-  console.log("SOSAlertManager: Starting resolved-alert polling");
-  resolvedPollTimer = setInterval(async () => {
-    if (activeSOSAlerts.size === 0) {
-      stopResolvedPoll();
-      return;
-    }
-
-    // ✅ FIX (Step 4): Stop polling if all active alerts are engaged
-    // No need to poll DB when guard is actively viewing all incidents
-    const allEngaged = Array.from(activeSOSAlerts.values()).every(alert =>
-      alert.incidentKey && engagedIncidents.has(alert.incidentKey)
-    );
-
-    if (allEngaged) {
-      console.log("SOSAlertManager: All alerts engaged - pausing resolved-alert polling");
-      stopResolvedPoll();
-      return;
-    }
-
-    for (const gid of currentGroupIds) {
-      await checkForResolvedAlerts(gid);
-    }
-  }, RESOLVED_POLL_INTERVAL_MS);
-}
-
-/**
- * Stop the resolved-alert polling timer
- */
-function stopResolvedPoll() {
-  if (resolvedPollTimer) {
-    clearInterval(resolvedPollTimer);
-    resolvedPollTimer = null;
-    console.log("SOSAlertManager: Stopped resolved-alert polling");
-  }
-}
-
-// ============================================
 // DEDUPLICATION CLEANUP
 // ============================================
 
-/**
- * ✅ FIX (Step 2): Clean up old handled incidents to prevent memory leak
- * Removes incidents older than HANDLED_INCIDENT_TTL_MS (5 minutes)
- */
 function cleanupOldHandledIncidents() {
   const now = Date.now();
   let removedCount = 0;
@@ -808,96 +773,51 @@ function cleanupOldHandledIncidents() {
 }
 
 // ============================================
+// HELPERS
+// ============================================
+
+/**
+ * ✅ Check if there are any active alerts that are NOT suppressed
+ */
+function hasUnsuppressedAlerts() {
+  for (const [deviceId] of activeSOSAlerts) {
+    if (!isSuppressed(deviceId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ============================================
 // PUBLIC API
 // ============================================
 
 /**
- * ✅ FIX (Step 1): Mark an incident as engaged (guard entered Live View)
- * This prevents re-alarming for the same incident
- * @param {string} deviceId - The device ID that triggered SOS
- * @param {number} timestamp - The SOS timestamp (optional, uses current alert if not provided)
+ * ✅ Suppress an incident locally (receiver acknowledged)
+ * - Stops alarm on this device
+ * - Prevents overlay from re-appearing
+ * - Does NOT modify sender's DB status (golden rule)
+ * - Persisted to AsyncStorage (survives app restart)
+ * - Cleared only when sender cancels SOS
  */
-function setEngaged(deviceId, timestamp) {
-  // Get timestamp from active alert if not provided
-  const alertData = activeSOSAlerts.get(deviceId);
-  const ts = timestamp || alertData?.timestamp || Date.now();
-  const incidentKey = `${deviceId}:${ts}`;
+async function suppressIncident(deviceId) {
+  if (!deviceId) return;
 
-  console.log("SOSAlertManager: Marking incident as engaged:", incidentKey);
-  engagedIncidents.set(incidentKey, Date.now());
+  console.log("SOSAlertManager: Suppressing incident for", deviceId);
+  suppressedIncidents.set(deviceId, {
+    suppressedAt: Date.now(),
+    suppressedBy: myDeviceId,
+  });
+  await saveSuppressed();
 
-  // Stop alarm immediately when guard engages
-  AlarmService.stopAlarm().catch(() => {});
-
-  // ✅ FIX (Step 4): Stop polling if all active alerts are now engaged
-  const allEngaged = Array.from(activeSOSAlerts.values()).every(alert =>
-    alert.incidentKey && engagedIncidents.has(alert.incidentKey)
-  );
-
-  if (allEngaged && resolvedPollTimer) {
-    console.log("SOSAlertManager: All alerts engaged - stopping resolved-alert polling");
-    stopResolvedPoll();
-  }
-}
-
-/**
- * ✅ FIX (Step 1): Check if an incident is already engaged
- * @param {string} deviceId - The device ID that triggered SOS
- * @param {number} timestamp - The SOS timestamp (optional)
- * @returns {boolean} True if incident is engaged
- */
-function isEngaged(deviceId, timestamp) {
-  if (!timestamp) {
-    // If no timestamp provided, check by deviceId prefix
-    for (const key of engagedIncidents.keys()) {
-      if (key.startsWith(`${deviceId}:`)) {
-        return true;
-      }
-    }
-    return false;
-  }
-  const incidentKey = `${deviceId}:${timestamp}`;
-  return engagedIncidents.has(incidentKey);
-}
-
-/**
- * Acknowledge an SOS alert
- * Stops alarm for this device and broadcasts acknowledgment
- * ✅ FIX: Now updates database to stop future notifications
- */
-async function acknowledgeAlert(deviceId) {
-  console.log("SOSAlertManager: Acknowledging alert for", deviceId);
-
-  // Remove from active alerts
-  activeSOSAlerts.delete(deviceId);
-  await saveActiveAlerts();
-
-  // Stop alarm + polling if no more active alerts
-  if (activeSOSAlerts.size === 0) {
+  // Stop alarm if no unsuppressed alerts remain
+  if (!hasUnsuppressedAlerts()) {
     await AlarmService.stopAlarm();
     stopResolvedPoll();
   }
 
-  // ✅ Update database to mark SOS as resolved (prevents new notifications)
-  // Set status to OFFLINE so DB triggers stop sending push notifications
-  try {
-    const { error } = await supabase
-      .from("tracking_sessions")
-      .update({ status: "OFFLINE" })
-      .eq("device_id", deviceId)
-      .eq("status", "SOS");
-
-    if (error) {
-      console.log("SOSAlertManager: Failed to update DB on acknowledge:", error);
-    } else {
-      console.log("SOSAlertManager: Database updated - no more notifications will be sent");
-    }
-  } catch (e) {
-    console.log("SOSAlertManager: Error updating DB:", e);
-  }
-
-  // Broadcast acknowledgment to all fleet channels
-  for (const [gid, ch] of realtimeChannels) {
+  // Broadcast acknowledgment to fleet (informational only - no DB write)
+  for (const [, ch] of realtimeChannels) {
     try {
       await ch.send({
         type: "broadcast",
@@ -913,12 +833,30 @@ async function acknowledgeAlert(deviceId) {
 }
 
 /**
- * Dismiss all alerts (stops alarm but doesn't broadcast)
+ * ✅ RENAMED: acknowledgeAlert now delegates to suppressIncident
+ * - Does NOT write to sender's tracking_sessions (golden rule)
+ * - Only suppresses locally + broadcasts ack
+ */
+async function acknowledgeAlert(deviceId) {
+  console.log("SOSAlertManager: Acknowledging alert for", deviceId);
+  await suppressIncident(deviceId);
+}
+
+/**
+ * Dismiss all alerts (stops alarm, suppresses all, no broadcast)
  */
 async function dismissAllAlerts() {
   console.log("SOSAlertManager: Dismissing all alerts");
-  activeSOSAlerts.clear();
-  await saveActiveAlerts();
+
+  // Suppress all active incidents
+  for (const [deviceId] of activeSOSAlerts) {
+    suppressedIncidents.set(deviceId, {
+      suppressedAt: Date.now(),
+      suppressedBy: myDeviceId,
+    });
+  }
+  await saveSuppressed();
+
   await AlarmService.stopAlarm();
   stopResolvedPoll();
 }
@@ -931,6 +869,15 @@ function getActiveAlerts() {
 }
 
 /**
+ * Get unsuppressed active alerts (for showing next overlay)
+ */
+function getUnsuppressedAlerts() {
+  return Array.from(activeSOSAlerts.entries())
+    .filter(([deviceId]) => !isSuppressed(deviceId))
+    .map(([, data]) => data);
+}
+
+/**
  * Check if there are any active alerts
  */
 function hasActiveAlerts() {
@@ -938,8 +885,22 @@ function hasActiveAlerts() {
 }
 
 /**
- * Update group IDs (when user switches fleets or groups change)
- * Accepts single groupId (backwards compat) or array
+ * ✅ setEngaged is now an alias for suppressIncident
+ * Kept for backwards compatibility with fleet.js
+ */
+function setEngaged(deviceId) {
+  suppressIncident(deviceId).catch(() => {});
+}
+
+/**
+ * ✅ Check if an incident is suppressed/engaged
+ */
+function isEngaged(deviceId) {
+  return isSuppressed(deviceId);
+}
+
+/**
+ * Update group IDs (when user switches fleets)
  */
 async function updateGroup(newGroupIds, deviceId) {
   const ids = Array.from(new Set(
@@ -963,12 +924,16 @@ export const SOSAlertManager = {
   initialize,
   cleanup,
   acknowledgeAlert,
+  suppressIncident,
   dismissAllAlerts,
   getActiveAlerts,
+  getUnsuppressedAlerts,
   hasActiveAlerts,
+  hasUnsuppressedAlerts,
+  isSuppressed,
   updateGroup,
-  setEngaged,  // ✅ Step 1: Track when guard enters Live View
-  isEngaged,   // ✅ Step 1: Check if incident is already engaged
+  setEngaged,
+  isEngaged,
 };
 
 export default SOSAlertManager;

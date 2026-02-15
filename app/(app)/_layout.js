@@ -169,6 +169,11 @@ export default function AppLayout() {
         await SOSAlertManager.initialize(allGroupIds, deviceId, {
           onSOSReceived: (data) => {
             if (!mounted) return;
+            // ✅ FIX: Don't show overlay if this incident is already suppressed
+            if (data.deviceId && SOSAlertManager.isSuppressed(data.deviceId)) {
+              console.log("AppLayout: SOS received but suppressed for", data.deviceId);
+              return;
+            }
             console.log("AppLayout: SOS received", data);
             setSosAlert({
               deviceId: data.deviceId,
@@ -226,18 +231,17 @@ export default function AppLayout() {
     };
   }, []);
 
-  // Handle SOS alert actions
-  // ✅ FIX (Bug 6): After acknowledging one alert, show the next active alert if any
-  // ✅ FIX (Step 1): Stop alarm immediately and mark incident as engaged
+  // ✅ FIX: Handle SOS alert actions using LOCAL SUPPRESSION (no DB writes)
+  // Suppression prevents overlay from re-appearing for the same incident.
+  // Alarm only restarts if there are unsuppressed alerts from OTHER devices.
+
   const handleAcknowledge = useCallback(async () => {
     if (sosAlert?.deviceId) {
-      // ✅ Step 1: Stop alarm and mark incident as engaged BEFORE acknowledging
-      AlarmService.stopAlarm();
-      SOSAlertManager.setEngaged(sosAlert.deviceId);
-      await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
+      // ✅ Suppress locally (stops alarm, prevents re-alarm, no DB write)
+      await SOSAlertManager.suppressIncident(sosAlert.deviceId);
     }
-    // Check for remaining active alerts
-    const remaining = SOSAlertManager.getActiveAlerts();
+    // Check for remaining UNSUPPRESSED alerts (show next if any)
+    const remaining = SOSAlertManager.getUnsuppressedAlerts();
     if (remaining.length > 0) {
       const next = remaining[0];
       setSosAlert({
@@ -251,17 +255,13 @@ export default function AppLayout() {
     }
   }, [sosAlert]);
 
-  // ✅ FIX (Bug 5): Acknowledge alert before navigating (prevents alarm restart on resume)
-  // ✅ FIX (Step 1): Stop alarm immediately and mark incident as engaged
   const handleViewLocation = useCallback(async () => {
     if (sosAlert?.deviceId) {
-      // ✅ Step 1: Stop alarm and mark incident as engaged BEFORE navigating to fleet
-      AlarmService.stopAlarm();
-      SOSAlertManager.setEngaged(sosAlert.deviceId);
-      await SOSAlertManager.acknowledgeAlert(sosAlert.deviceId);
+      // ✅ Suppress locally BEFORE navigating (prevents overlay loop)
+      await SOSAlertManager.suppressIncident(sosAlert.deviceId);
     }
-    router.push("/fleet");
     setSosAlert(null);
+    router.push("/fleet");
   }, [router, sosAlert]);
 
   const handleDismiss = useCallback(async () => {
