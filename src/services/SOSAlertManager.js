@@ -717,6 +717,7 @@ function stopResolvedPoll() {
 /**
  * Acknowledge an SOS alert
  * Stops alarm for this device and broadcasts acknowledgment
+ * ✅ FIX: Now updates database to stop future notifications
  */
 async function acknowledgeAlert(deviceId) {
   console.log("SOSAlertManager: Acknowledging alert for", deviceId);
@@ -729,6 +730,24 @@ async function acknowledgeAlert(deviceId) {
   if (activeSOSAlerts.size === 0) {
     await AlarmService.stopAlarm();
     stopResolvedPoll();
+  }
+
+  // ✅ Update database to mark SOS as resolved (prevents new notifications)
+  // Set status to OFFLINE so DB triggers stop sending push notifications
+  try {
+    const { error } = await supabase
+      .from("tracking_sessions")
+      .update({ status: "OFFLINE" })
+      .eq("device_id", deviceId)
+      .eq("status", "SOS");
+
+    if (error) {
+      console.log("SOSAlertManager: Failed to update DB on acknowledge:", error);
+    } else {
+      console.log("SOSAlertManager: Database updated - no more notifications will be sent");
+    }
+  } catch (e) {
+    console.log("SOSAlertManager: Error updating DB:", e);
   }
 
   // Broadcast acknowledgment to all fleet channels

@@ -363,6 +363,33 @@
     }
     .police-hero-btn:active { transform: scale(0.98); }
 
+    .navigate-hero-btn {
+      width: 100%;
+      background: linear-gradient(90deg, rgba(255,149,0,0.18), rgba(255,149,0,0.05));
+      color: #ffb366;
+      border: 1px solid rgba(255,149,0,0.65);
+      padding: 18px;
+      font-family: var(--font-ui);
+      font-size: 16px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.2s;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+      margin-bottom: 12px;
+    }
+    .navigate-hero-btn:hover {
+      background: rgba(255,149,0,0.85);
+      color: #000;
+      box-shadow: 0 0 25px rgba(255,149,0,0.35);
+    }
+    .navigate-hero-btn:active { transform: scale(0.98); }
+
     .police-list { margin-top: 15px; display: flex; flex-direction: column; gap: 10px; }
 
     .station-card {
@@ -1105,6 +1132,12 @@
 
       <div class="panel">
         <span class="panel-title">Emergency Response</span>
+
+        <!-- ✅ Navigate button - opens turn-by-turn directions to SOS location -->
+        <button class="navigate-hero-btn" id="navigate-hero-btn" onclick="navigateToSelectedSOS()" style="display:none;">
+          🧭 NAVIGATE TO SOS LOCATION
+        </button>
+
         <button class="police-hero-btn" onclick="retryScan()">
           🚨 SCAN FOR POLICE (NEAREST)
         </button>
@@ -1515,8 +1548,13 @@
       // ✅ FIX: Reset video connection on fleet switch
       selectedSOSDeviceId = null;
       DEVICE_ID = null;
+      currentSOSLocation = null; // Clear SOS location
       await safeLeaveAgora();
       camTracks.front = null;
+
+      // ✅ Hide Navigate button when switching fleets
+      const navBtn = document.getElementById('navigate-hero-btn');
+      if (navBtn) navBtn.style.display = 'none';
       remoteAudioTrack = null;
       audioUnmuted = false;
       showOverlay(true, 'SELECT AN SOS ALERT TO VIEW FEED');
@@ -2021,10 +2059,29 @@
         if (member && member.latitude && member.longitude) {
           currentSOSLocation = { lat: member.latitude, lng: member.longitude };
           setTimeout(() => scanForPolice(member.latitude, member.longitude), 500);
+
+          // ✅ Show Navigate button when SOS member is selected
+          const navBtn = document.getElementById('navigate-hero-btn');
+          if (navBtn) navBtn.style.display = 'flex';
         }
       } finally {
         sosSelectInFlight = false;
       }
+    }
+
+    /**
+     * ✅ Navigate to selected SOS location
+     * Opens Google Maps with turn-by-turn directions
+     */
+    function navigateToSelectedSOS() {
+      if (!currentSOSLocation || !currentSOSLocation.lat || !currentSOSLocation.lng) {
+        alert('No SOS location available - please select an SOS member first');
+        return;
+      }
+
+      const { lat, lng } = currentSOSLocation;
+      const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+      window.open(url, '_blank');
     }
 
     function setTopStatus(text) {

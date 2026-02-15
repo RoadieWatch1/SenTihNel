@@ -2104,17 +2104,6 @@ export default function FleetScreen() {
         </View>
 
         <View style={styles.cardActions}>
-          {/* Navigate button - only shows for SOS members */}
-          {isSOS && (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.navigateBtn]}
-              onPress={() => handleNavigate(item)}
-            >
-              <Ionicons name="navigate" size={16} color="#0b1220" />
-              <Text style={[styles.actionBtnText]}>Navigate</Text>
-            </TouchableOpacity>
-          )}
-
           <TouchableOpacity
             style={[styles.actionBtn, styles.liveBtn, isSOS && styles.liveBtnSOS]}
             onPress={() => openLiveView(item)}
@@ -2123,13 +2112,14 @@ export default function FleetScreen() {
             <Text style={[styles.actionBtnText, isSOS && styles.actionBtnTextSOS]}>Live View</Text>
           </TouchableOpacity>
 
+          {/* ✅ Navigate button - now opens turn-by-turn navigation (previously just viewed location) */}
           <TouchableOpacity
             style={[styles.actionBtn, styles.mapsBtn, isSOS && styles.mapsBtnSOS]}
-            onPress={() => openMaps(item)}
+            onPress={() => handleNavigate(item)}
           >
-            <Ionicons name="map-outline" size={16} color={isSOS ? "#fee2e2" : "#e2e8f0"} />
+            <Ionicons name="navigate" size={16} color={isSOS ? "#fee2e2" : "#e2e8f0"} />
             <Text style={[styles.actionBtnText, styles.actionBtnTextLight, isSOS && styles.actionBtnTextSOS]}>
-              Maps
+              Navigate
             </Text>
           </TouchableOpacity>
 
