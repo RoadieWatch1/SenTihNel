@@ -8,6 +8,7 @@ import {
   Linking,
   Platform,
   AppState,
+  Alert,
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Battery from 'expo-battery';
@@ -101,6 +102,27 @@ export default function Diagnostics({ onComplete }) {
 
     try {
       // 1) Foreground first
+      const fgCheck = await Location.getForegroundPermissionsAsync();
+      if (fgCheck.status !== 'granted') {
+        // Google Play prominent disclosure (required before system dialog)
+        if (Platform.OS === 'android') {
+          const accepted = await new Promise((resolve) =>
+            Alert.alert(
+              'Location Access',
+              'SenTihNel collects location data to enable emergency tracking even when the app is closed or not in use.',
+              [
+                { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                { text: 'Continue', onPress: () => resolve(true) },
+              ],
+              { cancelable: false }
+            )
+          );
+          if (!accepted) {
+            await checkAll();
+            return;
+          }
+        }
+      }
       const fg = await Location.requestForegroundPermissionsAsync();
       if (fg.status !== 'granted') {
         await checkAll();

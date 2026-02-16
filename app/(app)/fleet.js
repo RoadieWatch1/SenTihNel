@@ -1307,6 +1307,21 @@ export default function FleetScreen() {
       // 1) Foreground location
       const fg = await Location.getForegroundPermissionsAsync();
       if (!isGranted(fg?.status)) {
+        // Google Play prominent disclosure (required before system dialog)
+        if (Platform.OS === "android") {
+          const accepted = await new Promise((resolve) =>
+            Alert.alert(
+              "Location Access",
+              "SenTihNel collects location data to enable emergency tracking even when the app is closed or not in use.",
+              [
+                { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+                { text: "Continue", onPress: () => resolve(true) },
+              ],
+              { cancelable: false }
+            )
+          );
+          if (!accepted) return;
+        }
         const fgReq = await Location.requestForegroundPermissionsAsync();
         if (!isGranted(fgReq?.status)) return;
       }
