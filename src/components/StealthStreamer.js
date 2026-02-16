@@ -331,6 +331,13 @@ export default function StealthStreamer({ channelId, defaultFacing = "back" }) {
       console.log("✅ Agora token fetched for channel:", channelId, "publisherUid:", publisherUid);
     } catch (e) {
       console.error("❌ Agora token fetch failed:", e?.message);
+      // Edge Function HTTP errors (non-2xx) are server-side issues (bad config, missing secrets, etc.)
+      // They won't resolve on network recovery — mark permanent to stop the NetInfo retry loop
+      const isHttpError = e?.name === "FunctionsHttpError" || e?.context?.response?.status >= 400;
+      if (isHttpError) {
+        console.error("❌ Agora token: server returned HTTP error — marking permanent (won't auto-retry on network change)");
+        permanentFailRef.current = true;
+      }
       setEngineState("error");
       initLockRef.current = false;
       return;
