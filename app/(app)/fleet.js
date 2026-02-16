@@ -230,6 +230,7 @@ export default function FleetScreen() {
   const activeGroupIdRef = useRef(null); // ✅ Track active group to prevent stale subscription data
   const fetchFleetRef = useRef(null); // ✅ Stable ref for fetchFleet (avoids broadcast channel churn)
   const permissionsRequestedRef = useRef(false); // ✅ Prevent duplicate permission requests
+  const switchingRef = useRef(false); // ✅ Ref-based guard to prevent double tab switch (state is stale on rapid calls)
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -970,6 +971,15 @@ export default function FleetScreen() {
         if (dId && dName) nextMap[dId] = dName;
       }
 
+      // ✅ FIX: Provide fallback name for devices that have tracking_sessions rows
+      // but no devices table row (orphan devices). Without this, they show as raw device IDs.
+      for (const dId of deviceIds) {
+        if (!nextMap[dId]) {
+          const short = dId.length > 12 ? dId.slice(-8) : dId;
+          nextMap[dId] = `Member • ${short}`;
+        }
+      }
+
       console.log("🔍 hydrateNamesForSessions: nextMap", nextMap);
       console.log("🔍 hydrateNamesForSessions: isMountedRef.current", isMountedRef.current);
 
@@ -1109,6 +1119,10 @@ export default function FleetScreen() {
   const handleTabSwitch = useCallback(async (tab) => {
     if (tab === selectedFleetType) return;
 
+    // ✅ FIX: Use ref guard (not state) to prevent double-fire on rapid calls.
+    // React state `switching` is batched and stale when the second call arrives.
+    if (switchingRef.current) return;
+
     // Determine the groupId for the selected fleet type
     const newGid = tab === "work" ? workGroupId : familyGroupId;
     if (!newGid) {
@@ -1119,9 +1133,8 @@ export default function FleetScreen() {
     const prevGroupId = groupId ? String(groupId) : null;
     console.log("Switch requested:", tab, "->", newGid?.slice(0, 8));
 
-    // Prevent concurrent switches
-    if (switching) return;
     try {
+      switchingRef.current = true;
       setSwitching(true);
 
       // 1️⃣ Resolve: if the user already owns the fleet we still need to move the device binding
@@ -1205,9 +1218,10 @@ export default function FleetScreen() {
         setIncomingSos(null);
       }
     } finally {
+      switchingRef.current = false;
       setSwitching(false);
     }
-  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup, groupId, switching, loadFleetContext]);
+  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup, groupId, loadFleetContext]);
 
   const sortedWorkers = useMemo(() => {
     const now = Date.now();
