@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.vizir.sentihnel",
-      "versionCode": 3,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
       "useNextNotificationsApi": true,
       "permissions": [
@@ -39,6 +39,9 @@
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+      ],
+      "blockedPermissions": [
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
       ]
     },
     "web": {

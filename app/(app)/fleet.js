@@ -161,6 +161,7 @@ export default function FleetScreen() {
   }, [navigation, router]);
 
   const [workers, setWorkers] = useState([]);
+  const workersRef = useRef([]);
   const [nameByDevice, setNameByDevice] = useState({}); // device_id -> display_name
 
   const [loading, setLoading] = useState(true);
@@ -1083,6 +1084,7 @@ export default function FleetScreen() {
           filtered = deduped;
         }
 
+        workersRef.current = filtered;
         if (isMountedRef.current) setWorkers(filtered);
 
         await hydrateNamesForSessions({ gid, sessions: filtered });
@@ -1482,14 +1484,16 @@ export default function FleetScreen() {
       // ✅ FIX: Await permissions so GPS is ready before rebind attempt.
       await requestPermissionsAndStartTracking();
 
-      // ✅ FIX: Force an immediate GPS sync so a tracking_sessions row exists for this fleet,
-      // then re-fetch. Without this, the first fetchFleet returns 0 rows because the tracker
-      // hasn't upserted yet, leaving the fleet empty until a manual tab switch.
-      // ✅ FIX #2: Await the second fetch so names load before render (prevents "Device" names until tab switch)
+      // Force GPS sync + poll for tracking_sessions row.
+      // The tracker needs a moment after cold start to upsert, so we retry up to 3 times
+      // with 1.5s gaps. This runs under the existing loading spinner.
       if (gidToUse) {
         try { await rebindTrackerToLatestFleet("boot"); } catch {}
-        if (isMountedRef.current && fetchFleetRef.current) {
-          await fetchFleetRef.current(gidToUse);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!isMountedRef.current) break;
+          if (fetchFleetRef.current) await fetchFleetRef.current(gidToUse);
+          if (workersRef.current?.length > 0) break;
         }
       }
     } catch (e) {
