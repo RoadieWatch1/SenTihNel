@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.vizir.sentihnel",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "useNextNotificationsApi": true,
       "permissions": [
