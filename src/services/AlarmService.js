@@ -54,18 +54,26 @@ async function initAudio() {
  */
 async function startAlarm() {
   if (isAlarmPlaying) {
-    console.log("AlarmService: Alarm already playing");
-    return;
+    // ✅ M1: If flag is set but sound object is missing, allow a sound retry
+    // (happens when previous load failed — vibration is running but no audio)
+    if (!alarmSound) {
+      console.log("AlarmService: Alarm active but sound missing — retrying sound load");
+    } else {
+      console.log("AlarmService: Alarm already playing");
+      return;
+    }
   }
 
   console.log("🚨 AlarmService: Starting SOS alarm");
-  isAlarmPlaying = true;
 
   // Initialize audio mode
   await initAudio();
 
-  // Start vibration
+  // Start vibration (idempotent — stopVibration is called inside)
   startVibration();
+
+  // ✅ M1: Set isAlarmPlaying AFTER vibration is confirmed started, NOT before sound loads
+  isAlarmPlaying = true;
 
   // Load and play alarm sound
   try {
@@ -110,7 +118,8 @@ async function startAlarm() {
     }
   } catch (e) {
     console.log("AlarmService: Failed to play alarm sound", e);
-    // Continue with vibration even if sound fails
+    // ✅ M1: Don't set alarmSound — leave it null so next startAlarm() can retry sound
+    // Vibration is still running (isAlarmPlaying = true is correct, vibration IS active)
   }
 }
 

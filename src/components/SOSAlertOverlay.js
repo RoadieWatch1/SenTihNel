@@ -9,7 +9,6 @@ import {
   StyleSheet,
   Animated,
   TouchableOpacity,
-  Dimensions,
   StatusBar,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -205,17 +204,11 @@ export default function SOSAlertOverlay({
 // STYLES
 // ============================================
 
-const { width, height } = Dimensions.get("window");
-
 const styles = StyleSheet.create({
   container: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: width,
-    height: height,
+    // ✅ M2: Use absoluteFillObject instead of Dimensions.get("window") so the overlay
+    // correctly fills the screen on Z Fold unfold and orientation changes.
+    ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 9999,

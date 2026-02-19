@@ -505,7 +505,7 @@ export default function HomePage() {
   }, [permReady]);
 
   // ✅ Updated triggerSOS to accept optional wake word parameter
-  const triggerSOS = (detectedPhrase) => {
+  const triggerSOS = async (detectedPhrase) => {
     if (deviceId === "Loading..." || deviceId === "Unavailable") return;
 
     if (!permReady) {
@@ -540,9 +540,20 @@ export default function HomePage() {
       console.log("⚠️ SILENT ALARM TRIGGERED by button press");
     }
 
-    sendBatSignal(deviceId);
+    // ✅ C1: Write SOS sentinel BEFORE any async network work.
+    // If the process is killed in the brief window after button press, cold-start
+    // recovery reads this flag and restores FakeLockScreen on next launch.
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY_SOS, "1");
+    } catch (e) {
+      console.warn("Failed to persist SOS sentinel (non-fatal):", e);
+    }
+
     setIsSOS(true);
-    setSosStartTime(Date.now()); // ✅ Record SOS start time
+    setSosStartTime((prev) => prev || Date.now()); // ✅ Don't overwrite if already set
+
+    // Fire BatSignal pipeline (GPS + broadcast + DB). Non-blocking — lock screen is already up.
+    sendBatSignal(deviceId).catch((e) => console.warn("sendBatSignal failed (non-fatal):", e));
 
     setTimeout(() => {
       sosLockRef.current = false;

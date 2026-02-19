@@ -924,14 +924,18 @@ export const sendBatSignal = async (arg) => {
             return;
           }
         } catch {}
+        let retrySucceeded = false;
         for (const gid of targets) {
           try {
             const ok = await tryBroadcastSOS({ groupId: gid, deviceId, displayName, link: fullLink, lat: fastLat, lng: fastLng });
             if (ok) {
               console.log(`✅ SOS broadcast retry #${retry} succeeded for fleet:`, gid?.slice(0, 8));
+              retrySucceeded = true;
             }
           } catch {}
         }
+        // ✅ H3: Stop retrying once at least one broadcast succeeds
+        if (retrySucceeded) return;
       }
     })();
   }

@@ -50,6 +50,7 @@ import { startLiveTracking, rebindTrackerToLatestFleet } from "../../src/service
 import { handshakeDevice } from "../../src/services/deviceHandshake";
 import AlarmService from "../../src/services/AlarmService";
 import SOSAlertManager from "../../src/services/SOSAlertManager";
+import { hashPin } from "../../src/utils/pinHash";
 
 // Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
 let SecureStore = null;
@@ -57,24 +58,25 @@ try {
   SecureStore = require("expo-secure-store");
 } catch {}
 
+// Default (unscoped) key — callers pass a user-scoped key wherever userId is available
 const PIN_STORAGE_KEY = "sentinel_pin_hash";
 
-async function readPinHash() {
+async function readPinHash(key = PIN_STORAGE_KEY) {
   if (SecureStore?.getItemAsync) {
     try {
-      const v = await SecureStore.getItemAsync(PIN_STORAGE_KEY);
+      const v = await SecureStore.getItemAsync(key);
       if (v) return v;
     } catch {}
   }
-  try { return await AsyncStorage.getItem(PIN_STORAGE_KEY); } catch {}
+  try { return await AsyncStorage.getItem(key); } catch {}
   return null;
 }
 
-async function writePinHash(hash) {
+async function writePinHash(hash, key = PIN_STORAGE_KEY) {
   if (SecureStore?.setItemAsync) {
-    try { await SecureStore.setItemAsync(PIN_STORAGE_KEY, hash); } catch {}
+    try { await SecureStore.setItemAsync(key, hash); } catch {}
   }
-  try { await AsyncStorage.setItem(PIN_STORAGE_KEY, hash); } catch {}
+  try { await AsyncStorage.setItem(key, hash); } catch {}
 }
 
 const STORAGE_KEY_GROUP_ID = "sentinel_group_id";
@@ -87,19 +89,6 @@ const RPC_GET_GROUP_ID = "get_group_id_by_invite_code";
 const RPC_REMOVE_DEVICE = "remove_device_from_fleet";
 const RPC_HAS_SOS_PIN = "has_user_sos_pin";
 const RPC_SET_SOS_PIN = "set_user_sos_pin";
-
-// Simple hash function for PIN (consistent across app)
-const hashPin = (pin) => {
-  // Simple hash - in production you might use a proper crypto library
-  let hash = 0;
-  const str = String(pin || "");
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return `pin_${Math.abs(hash).toString(16).padStart(8, '0')}`;
-};
 
 // ✅ Your guardian dashboard base URL (existing public dashboard)
 const GUARDIAN_DASHBOARD_URL = "https://sentihnel.com/";
@@ -183,7 +172,6 @@ export default function FleetScreen() {
   // ✅ FIX #2: Separate groupId storage so UI tab and groupId never mismatch
   const [familyGroupId, setFamilyGroupId] = useState(null);
   const [workGroupId, setWorkGroupId] = useState(null);
-  const [selectedFleetType, setSelectedFleetType] = useState("family"); // ✅ FIX #2: Persisted
 
   // Optional: show a quick banner when an SOS broadcast hits
   const [incomingSos, setIncomingSos] = useState(null);
@@ -232,6 +220,9 @@ export default function FleetScreen() {
   const fetchFleetRef = useRef(null); // ✅ Stable ref for fetchFleet (avoids broadcast channel churn)
   const permissionsRequestedRef = useRef(false); // ✅ Prevent duplicate permission requests
   const switchingRef = useRef(false); // ✅ Ref-based guard to prevent double tab switch (state is stale on rapid calls)
+  const workGroupIdRef = useRef(null); // ✅ Ref mirror so async handlers always see latest work group ID
+  const familyGroupIdRef = useRef(null); // ✅ Ref mirror so async handlers always see latest family group ID
+  const rollbackLockRef = useRef(false); // ✅ Prevents reconcileGroupFromDeviceRow from overwriting activeGroupIdRef during rollback
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -305,9 +296,8 @@ export default function FleetScreen() {
       allKeys: Object.keys(nameByDevice || {}),
       nameByDevice: nameByDevice
     });
-    // ✅ If name is the SQL fallback "Device", treat it as missing and show better default
     const trimmed = name ? String(name).trim() : "";
-    if (trimmed && trimmed !== "Device") return trimmed;
+    if (trimmed) return trimmed;
     return buildFallbackLabel(deviceId);
   };
 
@@ -369,6 +359,67 @@ export default function FleetScreen() {
       return null;
     }
   }, []);
+
+  // ✅ HOOK ORDER FIX: reconcileGroupFromDeviceRow must be declared BEFORE loadFleetContext
+  // because loadFleetContext lists it as a dep. const is NOT hoisted — if it appeared after
+  // loadFleetContext the dep array on first render would capture `undefined`, causing a
+  // second useCallback memo-bust on the next render (boot() fires twice).
+  const reconcileGroupFromDeviceRow = useCallback(async () => {
+    try {
+      const deviceId = await getDeviceId();
+
+      const { data, error } = await supabase
+        .from("devices")
+        .select("group_id")
+        .eq("device_id", deviceId)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        console.log("reconcileGroupFromDeviceRow warning:", error.message);
+        return null;
+      }
+
+      const gid = data?.group_id ? String(data.group_id) : null;
+      if (!gid) return null;
+
+      const cached = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
+      const cachedStr = cached ? String(cached) : null;
+
+      if (cachedStr !== gid) {
+        console.log("✅ Fleet context corrected from device row:", { cached: cachedStr, actual: gid });
+
+        // ✅ H1: Skip ALL cache + state correction during rollback to prevent BatSignal sending
+        // to the wrong fleet (rollbackLockRef guards AsyncStorage write, not just the ref).
+        if (rollbackLockRef.current) {
+          console.log("⛔ reconcileGroupFromDeviceRow: rollbackLockRef held — skipping cache/state correction");
+          return gid;
+        }
+
+        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gid);
+        await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
+        activeGroupIdRef.current = gid;
+
+        if (isMountedRef.current) {
+          setGroupId(gid);
+          setInviteCode("");
+          setRecentCheckIns([]);
+          setIncomingSos(null);
+        }
+
+        const code = await fetchInviteCodeForGroup(gid);
+        if (code) {
+          await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, String(code));
+          if (isMountedRef.current) setInviteCode(String(code));
+        }
+      }
+
+      return gid;
+    } catch (e) {
+      console.log("reconcileGroupFromDeviceRow error:", e?.message || e);
+      return null;
+    }
+  }, [fetchInviteCodeForGroup]);
 
   const loadFleetContext = useCallback(async () => {
     try {
@@ -450,57 +501,6 @@ export default function FleetScreen() {
     }
   }, []);
 
-  // ✅ After login, don't trust cached group_id.
-  const reconcileGroupFromDeviceRow = useCallback(async () => {
-    try {
-      const deviceId = await getDeviceId();
-
-      const { data, error } = await supabase
-        .from("devices")
-        .select("group_id")
-        .eq("device_id", deviceId)
-        .limit(1)
-        .maybeSingle();
-
-      if (error) {
-        console.log("reconcileGroupFromDeviceRow warning:", error.message);
-        return null;
-      }
-
-      const gid = data?.group_id ? String(data.group_id) : null;
-      if (!gid) return null;
-
-      const cached = await AsyncStorage.getItem(STORAGE_KEY_GROUP_ID);
-      const cachedStr = cached ? String(cached) : null;
-
-      if (cachedStr !== gid) {
-        console.log("✅ Fleet context corrected from device row:", { cached: cachedStr, actual: gid });
-
-        await AsyncStorage.setItem(STORAGE_KEY_GROUP_ID, gid);
-        await AsyncStorage.removeItem(STORAGE_KEY_INVITE_CODE);
-
-        activeGroupIdRef.current = gid; // ✅ Track active group
-        if (isMountedRef.current) {
-          setGroupId(gid);
-          setInviteCode("");
-          setRecentCheckIns([]); // ✅ Clear stale banners from previous fleet
-          setIncomingSos(null);
-        }
-
-        const code = await fetchInviteCodeForGroup(gid);
-        if (code) {
-          await AsyncStorage.setItem(STORAGE_KEY_INVITE_CODE, String(code));
-          if (isMountedRef.current) setInviteCode(String(code));
-        }
-      }
-
-      return gid;
-    } catch (e) {
-      console.log("reconcileGroupFromDeviceRow error:", e?.message || e);
-      return null;
-    }
-  }, [fetchInviteCodeForGroup]);
-
   const resolveGroupIdByInviteCode = useCallback(async (cleanCode) => {
     try {
       const { data, error } = await supabase.rpc(RPC_GET_GROUP_ID, { p_invite_code: cleanCode });
@@ -515,7 +515,8 @@ export default function FleetScreen() {
 
   // ✅ Join fleet with 2-arg → 1-arg fallback (handles DB with or without p_fleet_type)
   const joinFleetByInviteCode = useCallback(async ({ inviteCode, fleetType }) => {
-    const clean = String(inviteCode || "").trim();
+    // ✅ normalizeInviteCode strips non-alphanumeric and uppercases — matches SQL normalization
+    const clean = normalizeInviteCode(inviteCode);
     if (!clean) throw new Error("Missing invite code");
 
     // Try 2-arg overload first (p_invite_code + p_fleet_type)
@@ -635,11 +636,19 @@ export default function FleetScreen() {
   // ✅ Check if user has SOS PIN set (falls back to local cache if Supabase is unreachable)
   // ✅ Also restores PIN hash from cloud to local storage after app reinstall
   const checkHasPin = useCallback(async () => {
+    // Resolve userId for user-scoped storage key (defense against cross-account bleed)
+    let uid = null;
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      uid = authData?.user?.id || null;
+    } catch {}
+    const scopedKey = uid ? `sentinel_pin_hash:${uid}` : PIN_STORAGE_KEY;
+
     try {
       const { data, error } = await supabase.rpc(RPC_HAS_SOS_PIN);
       if (error) {
         console.log("checkHasPin warning:", error.message);
-        const cached = await readPinHash();
+        const cached = await readPinHash(scopedKey);
         if (isMountedRef.current) setHasPin(!!cached);
         return;
       }
@@ -648,18 +657,19 @@ export default function FleetScreen() {
 
       // ✅ PIN recovery: if cloud has a PIN but local storage is empty (reinstall),
       // pull the hash back into local storage so offline SOS cancel works.
+      // MUST use .eq("user_id", uid) — never rely on .limit(1) without a user filter.
       if (result) {
-        const localHash = await readPinHash();
-        if (!localHash) {
+        const localHash = await readPinHash(scopedKey);
+        if (!localHash && uid) {
           try {
             const { data: pinRow, error: pinErr } = await supabase
               .from("user_sos_pins")
               .select("pin_hash")
-              .limit(1)
+              .eq("user_id", uid)
               .maybeSingle();
 
             if (!pinErr && pinRow?.pin_hash) {
-              await writePinHash(pinRow.pin_hash);
+              await writePinHash(pinRow.pin_hash, scopedKey);
               console.log("✅ PIN hash restored from cloud to local storage (reinstall recovery)");
             }
           } catch (e) {
@@ -670,7 +680,7 @@ export default function FleetScreen() {
     } catch (e) {
       console.log("checkHasPin error:", e?.message || e);
       try {
-        const cached = await readPinHash();
+        const cached = await readPinHash(scopedKey);
         if (isMountedRef.current) setHasPin(!!cached);
       } catch {
         if (isMountedRef.current) setHasPin(false);
@@ -756,11 +766,19 @@ export default function FleetScreen() {
     try {
       const hashed = hashPin(pinInput);
 
+      // Resolve userId for user-scoped storage key
+      let uid = null;
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        uid = authData?.user?.id || null;
+      } catch {}
+      const scopedKey = uid ? `sentinel_pin_hash:${uid}` : PIN_STORAGE_KEY;
+
       // Always save locally first (SecureStore + AsyncStorage fallback)
-      await writePinHash(hashed);
+      await writePinHash(hashed, scopedKey);
 
       // Verify the save actually worked
-      const verify = await readPinHash();
+      const verify = await readPinHash(scopedKey);
       if (verify !== hashed) {
         throw new Error("PIN failed to save to device storage. Please try again.");
       }
@@ -918,7 +936,7 @@ export default function FleetScreen() {
     Alert.alert("Coordinates", `${who}\n\n${coords}\n\n(Read to police exactly as shown)`);
   };
 
-  const hydrateNamesForSessions = useCallback(async ({ gid, sessions }) => {
+  const hydrateNamesForSessions = useCallback(async ({ gid, sessions, _isRetry = false }) => {
     try {
       console.log("🔍 hydrateNamesForSessions: START", { gid, sessionCount: sessions?.length });
 
@@ -958,11 +976,24 @@ export default function FleetScreen() {
       });
 
       if (error) {
-        console.log("devices name lookup warning:", error.message);
+        console.warn("devices name lookup warning:", error.message);
+        // ✅ Force a re-render so cards don't show stale placeholder state indefinitely
+        if (isMountedRef.current) setNameByDevice((prev) => ({ ...prev }));
         return;
       }
 
       const rows = Array.isArray(data) ? data : [];
+
+      // ✅ FIX: Retry once if RPC returns 0 rows — tracking_sessions row may not exist yet
+      if (rows.length === 0 && deviceIds.length > 0 && !_isRetry) {
+        console.log("🔍 hydrateNamesForSessions: 0 rows, retrying in 800ms...");
+        await new Promise((r) => setTimeout(r, 800));
+        if (isMountedRef.current) {
+          return hydrateNamesForSessions({ gid, sessions, _isRetry: true });
+        }
+        return;
+      }
+
       const nextMap = {};
 
       for (const r of rows) {
@@ -1018,8 +1049,9 @@ export default function FleetScreen() {
 
   const fetchFleet = useCallback(
     async (gidOverride) => {
-      if (fetchingRef.current) return;
-      fetchingRef.current = true;
+      const gidForLock = gidOverride ?? groupId;
+      if (fetchingRef.current === gidForLock) return; // ✅ GID-aware lock: different gid always gets through
+      fetchingRef.current = gidForLock;
 
       if (isMountedRef.current) setErrorText("");
 
@@ -1103,7 +1135,7 @@ export default function FleetScreen() {
           if (isMountedRef.current) setErrorText(msg);
         }
       } finally {
-        fetchingRef.current = false;
+        fetchingRef.current = null; // ✅ Clear lock regardless of which gid completed
         if (isMountedRef.current) {
           setLoading(false);
           setRefreshing(false);
@@ -1119,7 +1151,15 @@ export default function FleetScreen() {
   // ✅ Handle tab switch between user's OWN fleets (Work/Family)
   // On tab switch we MUST move the device binding in the DB so UI and device stay in sync.
   const handleTabSwitch = useCallback(async (tab) => {
-    if (tab === selectedFleetType) return;
+    // Allow same-tab tap to force a refresh instead of silently no-oping
+    if (tab === activeTab) {
+      const gid = tab === "work" ? workGroupId : familyGroupId;
+      if (gid && fetchFleetRef.current) {
+        activeGroupIdRef.current = gid;
+        await fetchFleetRef.current(gid);
+      }
+      return;
+    }
 
     // ✅ FIX: Use ref guard (not state) to prevent double-fire on rapid calls.
     // React state `switching` is batched and stale when the second call arrives.
@@ -1155,7 +1195,6 @@ export default function FleetScreen() {
 
       // 4️⃣ Update UI state to reflect new selection
       if (isMountedRef.current) {
-        setSelectedFleetType(tab);
         setActiveTab(tab);
         setGroupId(newGid);
         setInviteCode("");
@@ -1191,6 +1230,18 @@ export default function FleetScreen() {
       // 8️⃣ Rebind tracker caches + force GPS sync to new fleet
       try { await rebindTrackerToLatestFleet("tab_switch"); } catch {}
 
+      // 9️⃣ H2: Keep SOSAlertManager subscribed to ALL fleets (work + family) after switch.
+      // Prevents missed SOS alerts when user joins a new fleet mid-session.
+      try {
+        const allGids = [newGid, workGroupIdRef.current, familyGroupIdRef.current].filter(Boolean);
+        const uniqueGids = Array.from(new Set(allGids));
+        if (typeof SOSAlertManager?.updateGroup === "function") {
+          await SOSAlertManager.updateGroup(uniqueGids);
+        }
+      } catch (e) {
+        console.warn("SOSAlertManager.updateGroup failed (non-fatal):", e?.message || e);
+      }
+
       console.log("✅ Device moved to target group and UI refreshed:", newGid?.slice(0,8));
     } catch (e) {
       const msg = e?.message || String(e);
@@ -1207,10 +1258,14 @@ export default function FleetScreen() {
       } catch {}
 
       try {
-        // refresh view for previous group
+        // ✅ Lock ref during loadFleetContext so reconcileGroupFromDeviceRow
+        // cannot overwrite activeGroupIdRef with the DB's (already-moved) group
+        rollbackLockRef.current = true;
         await loadFleetContext();
         await fetchFleet(prevGroupId || null);
-      } catch {}
+      } catch {} finally {
+        rollbackLockRef.current = false;
+      }
 
       if (isMountedRef.current) {
         setGroupId(prevGroupId);
@@ -1223,7 +1278,7 @@ export default function FleetScreen() {
       switchingRef.current = false;
       setSwitching(false);
     }
-  }, [selectedFleetType, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup, groupId, loadFleetContext]);
+  }, [activeTab, workGroupId, familyGroupId, ownedFleets, fetchFleet, fetchInviteCodeForGroup, groupId, loadFleetContext]);
 
   const sortedWorkers = useMemo(() => {
     const now = Date.now();
@@ -1385,9 +1440,6 @@ export default function FleetScreen() {
         return;
       }
 
-      // ✅ Only mark boot done once session is confirmed valid
-      initialBootDoneRef.current = true;
-
       // ✅ First, ensure user has both Work and Family fleets
       // Timeout + session guard are handled inside ensureUserFleets() itself.
       let fleets = null;
@@ -1405,9 +1457,11 @@ export default function FleetScreen() {
       // Store both IDs separately so tab can switch without device binding issues
       if (fleets?.family?.groupId) {
         setFamilyGroupId(fleets.family.groupId);
+        familyGroupIdRef.current = fleets.family.groupId;
       }
       if (fleets?.work?.groupId) {
         setWorkGroupId(fleets.work.groupId);
+        workGroupIdRef.current = fleets.work.groupId;
       }
 
       // Load saved fleet selection or default to family
@@ -1424,7 +1478,6 @@ export default function FleetScreen() {
         codeToUse = savedFleetType === "work" ? fleets?.work?.inviteCode : fleets?.family?.inviteCode;
         activeGroupIdRef.current = gidToUse;
         if (isMountedRef.current) {
-          setSelectedFleetType(savedFleetType);
           setActiveTab(savedFleetType);
         }
       } else {
@@ -1436,7 +1489,6 @@ export default function FleetScreen() {
           activeGroupIdRef.current = gidToUse;
           const fbType = fleets?.family?.groupId === gidToUse ? "family" : "work";
           if (isMountedRef.current) {
-            setSelectedFleetType(fbType);
             setActiveTab(fbType);
           }
         }
@@ -1488,21 +1540,31 @@ export default function FleetScreen() {
       // The tracker needs a moment after cold start to upsert, so we retry up to 3 times
       // with 1.5s gaps. This runs under the existing loading spinner.
       if (gidToUse) {
-        try { await rebindTrackerToLatestFleet("boot"); } catch {}
+        try { await rebindTrackerToLatestFleet("boot_sync"); } catch {}
+        // Give tracker a moment to settle then force a clean fetch
+        await new Promise((r) => setTimeout(r, 1200));
+        if (isMountedRef.current && fetchFleetRef.current) {
+          await fetchFleetRef.current(gidToUse);
+        }
+        // Retry loop: poll until a tracking_sessions row appears (cold start)
         for (let attempt = 0; attempt < 3; attempt++) {
+          if (workersRef.current?.length > 0) break;
           await new Promise((r) => setTimeout(r, 1500));
           if (!isMountedRef.current) break;
           if (fetchFleetRef.current) await fetchFleetRef.current(gidToUse);
-          if (workersRef.current?.length > 0) break;
         }
       }
+
+      // ✅ FIX 9: Mark boot complete only after all work succeeds
+      // Previously set before any work — if a step failed, boot was locked out permanently
+      initialBootDoneRef.current = true;
     } catch (e) {
       console.log("boot error:", e?.message || e);
       if (isMountedRef.current) setErrorText("Could not load fleet. Pull down to retry.");
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
-  }, [fetchFleet, loadFleetContext, reconcileGroupFromDeviceRow, ensureUserFleets, fetchInviteCodeForGroup]);
+  }, [fetchFleet, ensureUserFleets, fetchInviteCodeForGroup]);
 
   // ✅ Force retry boot (resets the boot guard so boot() can run again)
   const retryBoot = useCallback(() => {
@@ -1532,11 +1594,15 @@ export default function FleetScreen() {
     const { data } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === "SIGNED_OUT") {
         try {
-          await AsyncStorage.multiRemove([STORAGE_KEY_GROUP_ID, STORAGE_KEY_INVITE_CODE]);
+          await AsyncStorage.multiRemove([STORAGE_KEY_GROUP_ID, STORAGE_KEY_INVITE_CODE, STORAGE_KEY_SELECTED_FLEET]);
         } catch {}
         activeGroupIdRef.current = null; // ✅ Clear active group tracking
+        workGroupIdRef.current = null;   // ✅ Prevent cross-account in-memory bleed
+        familyGroupIdRef.current = null;
         if (isMountedRef.current) {
           setGroupId(null);
+          setWorkGroupId(null);
+          setFamilyGroupId(null);
           setInviteCode("");
           setWorkers([]);
           setNameByDevice({});
@@ -1571,7 +1637,7 @@ export default function FleetScreen() {
         data?.subscription?.unsubscribe?.();
       } catch {}
     };
-  }, [boot]);
+  }, []); // ✅ Mount once — boot is called manually inside SIGNED_IN
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
@@ -1590,7 +1656,7 @@ export default function FleetScreen() {
         sub?.remove?.();
       } catch {}
     };
-  }, [groupId]);
+  }, []); // ✅ Handler uses activeGroupIdRef.current — no need to re-register on groupId change
 
   useEffect(() => {
     if (pgChannelRef.current) {
@@ -1714,9 +1780,13 @@ export default function FleetScreen() {
           );
         }
 
-        // Refresh fleet data from DB (may still show SOS briefly due to race, but
-        // the optimistic update above covers the UI immediately)
-        if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
+        // ✅ FIX 10: Delay DB re-fetch — optimistic update covers the UI immediately.
+        // An instant fetch races the DB cancel RPC and can overwrite OFFLINE with stale SOS.
+        setTimeout(() => {
+          if (!isMountedRef.current) return;
+          if (activeGroupIdRef.current && subscribedGroup !== activeGroupIdRef.current) return;
+          if (fetchFleetRef.current) fetchFleetRef.current(subscribedGroup);
+        }, 1500);
 
         // ✅ Safety: re-fetch again after 4s to catch the delayed OFFLINE RPC
         setTimeout(() => {
@@ -1792,9 +1862,13 @@ export default function FleetScreen() {
   };
 
   const handleSwitchFleet = async () => {
+    if (switchingRef.current) return; // ✅ Ref guard prevents double-fire before state re-render
+    switchingRef.current = true;
+
     const clean = normalizeInviteCode(switchInviteInput);
     if (!clean) {
       setSwitchError("Enter a valid invite code.");
+      switchingRef.current = false;
       return;
     }
 
@@ -1924,12 +1998,18 @@ export default function FleetScreen() {
       } catch {}
 
       try {
+        // ✅ Lock ref during loadFleetContext so reconcileGroupFromDeviceRow
+        // cannot overwrite activeGroupIdRef with the DB's (already-moved) group
+        rollbackLockRef.current = true;
         await loadFleetContext();
         await fetchFleet(prevGroupId || null);
-      } catch {}
+      } catch {} finally {
+        rollbackLockRef.current = false;
+      }
 
       setSwitchError(msg);
     } finally {
+      switchingRef.current = false; // ✅ Always release ref guard
       setSwitching(false);
     }
   };
@@ -2260,7 +2340,7 @@ export default function FleetScreen() {
                   </Text>
                 </View>
                 <Text style={styles.switchFleetTypeHint}>
-                  This will replace your current {switchFleetType} fleet membership
+                  Your existing {switchFleetType} fleet will be replaced by this one
                 </Text>
               </View>
 
