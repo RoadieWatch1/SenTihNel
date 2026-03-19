@@ -13,6 +13,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../src/lib/supabase";
 import { handshakeDevice } from "../src/services/deviceHandshake";
+import { SubscriptionProvider } from "../src/contexts/SubscriptionContext";
 
 // ===============================
 // Storage Keys
@@ -40,14 +41,14 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <SubscriptionProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
       </Stack>
 
       <AuthGate />
-    </>
+    </SubscriptionProvider>
   );
 }
 
