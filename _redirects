@@ -1,3 +1,6 @@
+/privacy     /privacy/index.html   200
+/privacy/*   /privacy/index.html   200
+
 /auth/confirm     /auth/confirm/index.html 200
 /auth/confirm/*   /auth/confirm/index.html 200
 
