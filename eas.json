@@ -11,15 +11,27 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
       }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+        "buildConfiguration": "Release"
       }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "admin@sentihnel.com",
+        "ascAppId": "6749286423",
+        "appleTeamId": "5G7AC95RK7"
+      }
+    }
   }
 }

@@ -478,11 +478,28 @@ export default function HomePage() {
     return () => sub.remove();
   }, [permReady, isSOS]);
 
-  // ✅ Floating SOS button: request overlay permission (after permissions are ready)
+  // ✅ Floating SOS button: request overlay permission (Android) or show Siri Shortcut hint (iOS)
   // Re-prompts once per app launch if permission still not granted (not just once ever)
   useEffect(() => {
-    if (!FloatingSOSButton.isAvailable || !permReady) return;
+    if (!permReady) return;
 
+    if (Platform.OS === "ios") {
+      // iOS substitute: guide users to add a Siri Shortcut for quick SOS access
+      (async () => {
+        const alreadyShown = await AsyncStorage.getItem("sentinel_siri_hint_shown").catch(() => null);
+        if (alreadyShown) return;
+        await AsyncStorage.setItem("sentinel_siri_hint_shown", "1").catch(() => {});
+        Alert.alert(
+          "Quick SOS Tip",
+          'For instant SOS access without opening the app, add a Siri Shortcut:\n\n1. Open the Shortcuts app\n2. Create a shortcut that opens sentihnel://\n3. Add it to your Home Screen or Lock Screen\n\nYou can also ask Siri to open SenTihNel.',
+          [{ text: "Got It" }]
+        );
+      })();
+      return;
+    }
+
+    // Android: request overlay permission for floating button
+    if (!FloatingSOSButton.isAvailable) return;
     (async () => {
       const hasOverlay = await FloatingSOSButton.checkPermission();
       overlayPermRef.current = hasOverlay;

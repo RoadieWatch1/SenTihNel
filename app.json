@@ -14,10 +14,15 @@
         "UIBackgroundModes": [
           "location",
           "fetch",
-          "remote-notification"
+          "remote-notification",
+          "audio"
         ],
-        "NSSpeechRecognitionUsageDescription": "Allow SenTihNel to use speech recognition.",
-        "NSMicrophoneUsageDescription": "Allow SenTihNel to use the microphone."
+        "NSSpeechRecognitionUsageDescription": "SenTihNel uses speech recognition to detect emergency voice phrases so you can trigger an SOS alert hands-free.",
+        "NSMicrophoneUsageDescription": "SenTihNel uses the microphone to listen for emergency voice phrases so you can trigger an SOS alert hands-free.",
+        "NSCameraUsageDescription": "SenTihNel uses the camera to stream live video to your fleet during an SOS emergency.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SenTihNel needs your location in the background to share your position with your fleet during an emergency.",
+        "NSLocationWhenInUseUsageDescription": "SenTihNel needs your location to share your position with your fleet during an emergency.",
+        "NSLocationAlwaysUsageDescription": "SenTihNel needs your location in the background to share your position with your fleet during an emergency."
       }
     },
     "android": {
@@ -83,8 +88,7 @@
             "./assets/alarm.mp3"
           ]
         }
-      ],
-      "./plugins/withFloatingSOSButton"
+      ]
     ],
     "extra": {
       "router": {},
