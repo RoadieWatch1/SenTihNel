@@ -22,6 +22,7 @@ import * as Clipboard from "expo-clipboard";
 import { supabase } from "../../src/lib/supabase";
 import { handshakeDevice, deriveDisplayName } from "../../src/services/deviceHandshake";
 import { forceOneShotSync } from "../../src/services/LiveTracker";
+import { colors, font, radius, space } from "../../src/theme";
 
 let SecureStore = null;
 try { SecureStore = require("expo-secure-store"); } catch {}
@@ -1406,7 +1407,14 @@ export default function AuthPage() {
       </Animated.View>
 
       <View style={styles.container}>
-        <Text style={styles.logo}>SENTIHNEL</Text>
+        {/* Brand header */}
+        <View style={styles.brandBlock}>
+          <View style={styles.brandIconWrap}>
+            <Ionicons name="shield-checkmark" size={40} color={colors.green} />
+          </View>
+          <Text style={styles.logo}>SenTihNel</Text>
+          <Text style={styles.tagline}>Stay protected, stay connected</Text>
+        </View>
         <Text style={styles.subtitle}>{title}</Text>
 
         {inSetupRequired ? (
@@ -1632,18 +1640,44 @@ export default function AuthPage() {
 // Styles
 // ===============================
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 30 },
-  logo: { color: "#22c55e", fontSize: 32, fontWeight: "bold", textAlign: "center", letterSpacing: 4, marginBottom: 8 },
-  subtitle: { color: "#94a3b8", textAlign: "center", marginBottom: 26 },
+  container: { flex: 1, justifyContent: "center", padding: 30, backgroundColor: colors.bg },
+  brandBlock: { alignItems: "center", marginBottom: space.lg },
+  brandIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.pill,
+    backgroundColor: colors.greenDim,
+    borderWidth: 1,
+    borderColor: colors.greenBorder,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: space.sm,
+  },
+  logo: {
+    color: colors.text,
+    fontSize: 30,
+    fontFamily: font.black,
+    letterSpacing: -0.5,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  tagline: {
+    color: colors.muted,
+    fontSize: 14,
+    fontFamily: font.reg,
+    textAlign: "center",
+  },
+  subtitle: { color: colors.muted, textAlign: "center", marginBottom: 26, fontFamily: font.med },
 
   input: {
-    backgroundColor: "#1e293b",
-    color: "#fff",
+    backgroundColor: colors.surfaceHigh,
+    color: colors.text,
     padding: 15,
-    borderRadius: 10,
+    borderRadius: radius.sm,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#0f172a",
+    borderColor: colors.border,
+    fontFamily: font.reg,
   },
 
   passwordWrap: {

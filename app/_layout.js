@@ -2,6 +2,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_900Black,
+} from "@expo-google-fonts/inter";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../src/lib/supabase";
 import { handshakeDevice } from "../src/services/deviceHandshake";
@@ -15,6 +23,22 @@ const STORAGE_KEY_PENDING_INVITE = "sentinel_pending_invite_code";
 const STORAGE_KEY_POST_LOGIN_ACTION = "sentinel_post_login_action";
 
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_900Black,
+  });
+
+  if (!fontsLoaded) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#080E1A", alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator size="large" color="#22C55E" />
+      </View>
+    );
+  }
+
   return (
     <>
       <Stack screenOptions={{ headerShown: false }}>

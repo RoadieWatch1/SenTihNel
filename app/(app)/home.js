@@ -22,11 +22,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 
-// ✅ Permissions (Expo)
 import * as Location from "expo-location";
 import { Camera } from "expo-camera";
 
-// --- Imports ---
 import WakeWordListener from "../../src/components/WakeWordListener";
 import StealthStreamer from "../../src/components/StealthStreamer";
 import {
@@ -37,33 +35,21 @@ import {
 } from "../../src/services/BatSignal";
 import FakeLockScreen from "../../src/components/FakeLockScreen";
 import { startLiveTracking } from "../../src/services/LiveTracker";
-import { getDeviceId as getStableDeviceId } from "../../src/services/Identity"; // ✅ Phase 1: single source of truth
+import { getDeviceId as getStableDeviceId } from "../../src/services/Identity";
 import { supabase } from "../../src/lib/supabase";
-
 import FloatingSOSButton from "../../src/services/FloatingSOSButton";
+import { colors, font, radius, space } from "../../src/theme";
 
 let SecureStore = null;
-try {
-  SecureStore = require("expo-secure-store");
-} catch {}
+try { SecureStore = require("expo-secure-store"); } catch {}
 
-// ✅ Must match Auth + LiveTracker key
 const STORAGE_KEY_DEVICE_ID = "sentinel_device_id";
-
-// ✅ Constants for Hidden Cancel Gesture
 const STORAGE_KEY_SOS = "sentinel_sos_active";
-
 const TAP_WINDOW_MS = 3000;
 const TAP_TARGET = 7;
 
 function isGranted(status) {
   return String(status || "").toLowerCase() === "granted";
-}
-function prettyStatus(status) {
-  const s = String(status || "unknown").toUpperCase();
-  if (s === "UNDETERMINED") return "WAITING";
-  if (s === "GRANTED") return "CLEAN";
-  return "ERROR";
 }
 
 export default function HomePage() {
@@ -71,42 +57,28 @@ export default function HomePage() {
 
   const [isSOS, setIsSOS] = useState(false);
   const [deviceId, setDeviceId] = useState("Loading...");
-
-  // ✅ Wake word status for debugging (optional - can show in UI)
   const [wakeWordStatus, setWakeWordStatus] = useState("Initializing...");
 
   const bootedRef = useRef(false);
   const trackerStartedRef = useRef(false);
   const sosLockRef = useRef(false);
 
-  // ✅ Hidden Tap State
+  // Hidden cancel gesture (7 taps on shield icon)
   const [tapCount, setTapCount] = useState(0);
   const tapStartRef = useRef(0);
-
-  // ✅ Ref for triggerSOS (used by notification/floating button listener to avoid stale closure)
   const triggerSOSRef = useRef(null);
 
-  // ✅ Floating SOS button state
-  const overlayPermRef = useRef(false); // Tracks overlay permission status
+  const overlayPermRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
 
-  // ✅ Check-In state
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [lastCheckIn, setLastCheckIn] = useState(null);
-
-  // ✅ Offline mode indicator
   const [isOffline, setIsOffline] = useState(false);
-  const [connectionType, setConnectionType] = useState(null);
-
-  // ✅ Post-SOS Report
   const [sosStartTime, setSosStartTime] = useState(null);
   const [showPostSosReport, setShowPostSosReport] = useState(false);
   const [lastSosDuration, setLastSosDuration] = useState(null);
+  const [hasPin, setHasPin] = useState(null);
 
-  // ✅ PIN setup check - prevent SOS without a PIN
-  const [hasPin, setHasPin] = useState(null); // null = loading, true/false = known
-
-  // ✅ Permission Gate State (prevents "silent tracking failure")
   const [permChecking, setPermChecking] = useState(false);
   const [permReady, setPermReady] = useState(false);
   const [permCanAskAgain, setPermCanAskAgain] = useState(true);
@@ -121,10 +93,8 @@ export default function HomePage() {
   const refreshPermissionSnapshot = async () => {
     try {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
-
       const fg = await Location.getForegroundPermissionsAsync();
       const bg = await Location.getBackgroundPermissionsAsync();
-
       const cam = await Camera.getCameraPermissionsAsync();
       const mic = await Camera.getMicrophonePermissionsAsync();
 
@@ -155,7 +125,6 @@ export default function HomePage() {
       setPermReady(ready);
       return ready;
     } catch (e) {
-      console.log("Permission snapshot warning:", e?.message || e);
       setPermReady(false);
       return false;
     }
@@ -165,22 +134,17 @@ export default function HomePage() {
     if (!stableId || stableId === "Loading..." || stableId === "Unavailable") return;
     if (!permReady) return;
     if (trackerStartedRef.current) return;
-
     trackerStartedRef.current = true;
-
-    // ✅ Start LiveTracker using the stable device id
     try {
       await startLiveTracking(stableId);
     } catch (e) {
-      console.log("Tracker start warning:", e?.message || e);
-      trackerStartedRef.current = false; // allow retry
+      trackerStartedRef.current = false;
     }
   };
 
   const requestAllPermissions = async () => {
     setPermChecking(true);
     try {
-      // 0) GPS services must be enabled
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
         await refreshPermissionSnapshot();
@@ -188,10 +152,8 @@ export default function HomePage() {
         return false;
       }
 
-      // 1) Foreground location
       const fg = await Location.getForegroundPermissionsAsync();
       if (!isGranted(fg?.status)) {
-        // Google Play prominent disclosure (required before system dialog)
         if (Platform.OS === "android") {
           const accepted = await new Promise((resolve) =>
             Alert.alert(
@@ -204,63 +166,35 @@ export default function HomePage() {
               { cancelable: false }
             )
           );
-          if (!accepted) {
-            await refreshPermissionSnapshot();
-            setPermChecking(false);
-            return false;
-          }
+          if (!accepted) { await refreshPermissionSnapshot(); setPermChecking(false); return false; }
         }
         const fgReq = await Location.requestForegroundPermissionsAsync();
-        if (!isGranted(fgReq?.status)) {
-          await refreshPermissionSnapshot();
-          setPermChecking(false);
-          return false;
-        }
+        if (!isGranted(fgReq?.status)) { await refreshPermissionSnapshot(); setPermChecking(false); return false; }
       }
 
-      // 2) Background location
       const bg = await Location.getBackgroundPermissionsAsync();
       if (!isGranted(bg?.status)) {
         const bgReq = await Location.requestBackgroundPermissionsAsync();
-        if (!isGranted(bgReq?.status)) {
-          await refreshPermissionSnapshot();
-          setPermChecking(false);
-          return false;
-        }
+        if (!isGranted(bgReq?.status)) { await refreshPermissionSnapshot(); setPermChecking(false); return false; }
       }
 
-      // 3) Camera
       const cam = await Camera.getCameraPermissionsAsync();
       if (!isGranted(cam?.status)) {
         const camReq = await Camera.requestCameraPermissionsAsync();
-        if (!isGranted(camReq?.status)) {
-          await refreshPermissionSnapshot();
-          setPermChecking(false);
-          return false;
-        }
+        if (!isGranted(camReq?.status)) { await refreshPermissionSnapshot(); setPermChecking(false); return false; }
       }
 
-      // 4) Microphone
       const mic = await Camera.getMicrophonePermissionsAsync();
       if (!isGranted(mic?.status)) {
         const micReq = await Camera.requestMicrophonePermissionsAsync();
-        if (!isGranted(micReq?.status)) {
-          await refreshPermissionSnapshot();
-          setPermChecking(false);
-          return false;
-        }
+        if (!isGranted(micReq?.status)) { await refreshPermissionSnapshot(); setPermChecking(false); return false; }
       }
 
       const ready = await refreshPermissionSnapshot();
       setPermChecking(false);
-
-      if (ready) {
-        await startTrackerIfReady(deviceId);
-      }
-
+      if (ready) await startTrackerIfReady(deviceId);
       return ready;
     } catch (e) {
-      console.log("Permission request warning:", e?.message || e);
       await refreshPermissionSnapshot();
       setPermChecking(false);
       return false;
@@ -268,11 +202,7 @@ export default function HomePage() {
   };
 
   const openSystemSettings = async () => {
-    try {
-      await Linking.openSettings();
-    } catch (e) {
-      console.log("Open settings failed:", e?.message || e);
-    }
+    try { await Linking.openSettings(); } catch {}
   };
 
   useEffect(() => {
@@ -281,11 +211,7 @@ export default function HomePage() {
 
     (async () => {
       let finalId = "Loading...";
-      try {
-        finalId = await getStableDeviceId();
-      } catch (e) {
-        console.log("Identity warning (non-fatal):", e?.message || e);
-      }
+      try { finalId = await getStableDeviceId(); } catch {}
 
       if (!finalId || finalId === "Loading...") {
         const storedId = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_ID);
@@ -301,86 +227,47 @@ export default function HomePage() {
       setDeviceId(finalId);
       registerForBatSignal();
 
-      // ✅ Cold-start SOS recovery: If app was killed mid-SOS, restore FakeLockScreen
-      // so the user can enter their PIN to cancel. Without this, SOS stays active
-      // in the DB but the user sees the normal home screen.
       try {
         const sosFlag = await AsyncStorage.getItem(STORAGE_KEY_SOS);
         if (sosFlag === "1") {
-          console.log("⚠️ Cold-start SOS recovery: SOS was active before app kill — restoring FakeLockScreen");
-          // Clear stale cloud recording flag so a new recording can start if needed
-          try {
-            await AsyncStorage.removeItem(`sentinel_cloudrec_started:${finalId}`);
-          } catch {}
+          try { await AsyncStorage.removeItem(`sentinel_cloudrec_started:${finalId}`); } catch {}
           setIsSOS(true);
           setSosStartTime(Date.now());
         }
       } catch {}
 
-      // ✅ Check if user has set up their SOS PIN + restore from cloud after reinstall
       try {
         const { data } = await supabase.rpc("has_user_sos_pin");
         const pinExists = data?.has_pin === true;
         setHasPin(pinExists);
 
-        // ✅ PIN recovery: if cloud has a PIN but local storage is empty (reinstall),
-        // pull the hash back so offline SOS cancel works on this device.
         if (pinExists) {
-          // Check SecureStore first (can survive some reinstalls), then AsyncStorage
           let localHash = null;
-          try {
-            if (SecureStore?.getItemAsync) {
-              localHash = await SecureStore.getItemAsync("sentinel_pin_hash");
-            }
-          } catch {}
-          if (!localHash) {
-            try { localHash = await AsyncStorage.getItem("sentinel_pin_hash"); } catch {}
-          }
+          try { if (SecureStore?.getItemAsync) localHash = await SecureStore.getItemAsync("sentinel_pin_hash"); } catch {}
+          if (!localHash) { try { localHash = await AsyncStorage.getItem("sentinel_pin_hash"); } catch {} }
 
           if (!localHash) {
             try {
-              const { data: pinRow } = await supabase
-                .from("user_sos_pins")
-                .select("pin_hash")
-                .limit(1)
-                .maybeSingle();
+              const { data: pinRow } = await supabase.from("user_sos_pins").select("pin_hash").limit(1).maybeSingle();
               if (pinRow?.pin_hash) {
-                // Write to both SecureStore + AsyncStorage for full coverage
-                try {
-                  if (SecureStore?.setItemAsync) {
-                    await SecureStore.setItemAsync("sentinel_pin_hash", pinRow.pin_hash);
-                  }
-                } catch {}
+                try { if (SecureStore?.setItemAsync) await SecureStore.setItemAsync("sentinel_pin_hash", pinRow.pin_hash); } catch {}
                 await AsyncStorage.setItem("sentinel_pin_hash", pinRow.pin_hash);
-                console.log("✅ PIN hash restored from cloud on home boot (reinstall recovery)");
               }
-            } catch (e) {
-              console.log("PIN recovery failed (non-fatal):", e?.message || e);
-            }
+            } catch {}
           }
         }
-      } catch {
-        setHasPin(false);
-      }
+      } catch { setHasPin(false); }
 
       const ready = await refreshPermissionSnapshot();
-
-      if (!ready) {
-        await requestAllPermissions();
-      } else {
-        await startTrackerIfReady(finalId);
-      }
+      if (!ready) await requestAllPermissions();
+      else await startTrackerIfReady(finalId);
     })();
   }, []);
 
   useEffect(() => {
-    if (permReady) {
-      startTrackerIfReady(deviceId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (permReady) startTrackerIfReady(deviceId);
   }, [permReady]);
 
-  // ✅ Re-check PIN status when screen comes into focus (e.g., after setting PIN on fleet page)
   useEffect(() => {
     const unsubscribe = navigation.addListener("focus", async () => {
       try {
@@ -391,157 +278,106 @@ export default function HomePage() {
     return unsubscribe;
   }, [navigation]);
 
-  // ✅ Lock Android back button during SOS
   useEffect(() => {
-    const backAction = () => {
-      if (isSOS) return true;
-      return false;
-    };
-
+    const backAction = () => { if (isSOS) return true; return false; };
     const sub = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => sub.remove();
   }, [isSOS]);
 
-  // ✅ Network connectivity monitoring
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       const connected = state?.isConnected === true && state?.isInternetReachable !== false;
       setIsOffline(!connected);
-      setConnectionType(state?.type || null);
     });
-
-    // Initial check
     NetInfo.fetch().then((state) => {
       const connected = state?.isConnected === true && state?.isInternetReachable !== false;
       setIsOffline(!connected);
-      setConnectionType(state?.type || null);
     });
-
     return () => unsubscribe();
   }, []);
 
-  // ✅ Stop floating button during SOS (not needed while FakeLockScreen is showing)
   useEffect(() => {
-    if (isSOS) {
-      if (FloatingSOSButton.isAvailable) FloatingSOSButton.stop();
-    }
+    if (isSOS) { if (FloatingSOSButton.isAvailable) FloatingSOSButton.stop(); }
   }, [isSOS]);
 
-  // ✅ Floating SOS button: listen for trigger events from the overlay
   useEffect(() => {
     if (!FloatingSOSButton.isAvailable) return;
     const sub = FloatingSOSButton.addSOSTriggerListener(() => {
-      console.log("⚠️ SOS TRIGGERED from floating overlay button");
-      // Stop the floating button since app is now in foreground
       FloatingSOSButton.stop();
-      if (triggerSOSRef.current) {
-        triggerSOSRef.current();
-      }
+      if (triggerSOSRef.current) triggerSOSRef.current();
     });
     return () => sub.remove();
   }, []);
 
-  // ✅ Floating SOS button: show when app goes to background, hide when foreground
   useEffect(() => {
     if (!FloatingSOSButton.isAvailable) return;
-
     const handleAppState = async (nextAppState) => {
-      const wasBackground = appStateRef.current?.match(/inactive|background/);
       appStateRef.current = nextAppState;
-
       if (nextAppState === "active") {
-        // App came to foreground — hide floating button
         FloatingSOSButton.stop();
-
-        // ✅ Re-check overlay permission every time app resumes
-        // (user may have granted it in Settings after the initial prompt)
         const hasOverlay = await FloatingSOSButton.checkPermission();
         overlayPermRef.current = hasOverlay;
-
-        // Backup: check SOS flag in case event didn't fire
         const triggered = await FloatingSOSButton.checkSOSFlag();
-        if (triggered && triggerSOSRef.current) {
-          console.log("⚠️ SOS TRIGGERED from floating button (flag fallback)");
-          triggerSOSRef.current();
-        }
+        if (triggered && triggerSOSRef.current) triggerSOSRef.current();
       } else if (nextAppState === "background" && permReady && !isSOS) {
-        // ✅ Re-check permission right before starting (may have been granted since last check)
         const hasOverlay = await FloatingSOSButton.checkPermission();
         overlayPermRef.current = hasOverlay;
-        if (hasOverlay) {
-          FloatingSOSButton.start();
-        }
+        if (hasOverlay) FloatingSOSButton.start();
       }
     };
-
     const sub = AppState.addEventListener("change", handleAppState);
     return () => sub.remove();
   }, [permReady, isSOS]);
 
-  // ✅ Floating SOS button: request overlay permission (Android) or show Siri Shortcut hint (iOS)
-  // Re-prompts once per app launch if permission still not granted (not just once ever)
   useEffect(() => {
     if (!permReady) return;
 
     if (Platform.OS === "ios") {
-      // iOS substitute: guide users to add a Siri Shortcut for quick SOS access
       (async () => {
         const alreadyShown = await AsyncStorage.getItem("sentinel_siri_hint_shown").catch(() => null);
         if (alreadyShown) return;
         await AsyncStorage.setItem("sentinel_siri_hint_shown", "1").catch(() => {});
         Alert.alert(
           "Quick SOS Tip",
-          'For instant SOS access without opening the app, add a Siri Shortcut:\n\n1. Open the Shortcuts app\n2. Create a shortcut that opens sentihnel://\n3. Add it to your Home Screen or Lock Screen\n\nYou can also ask Siri to open SenTihNel.',
+          'For instant SOS access without opening the app, add a Siri Shortcut:\n\n1. Open the Shortcuts app\n2. Create a shortcut that opens sentihnel://\n3. Add it to your Home Screen or Lock Screen',
           [{ text: "Got It" }]
         );
       })();
       return;
     }
 
-    // Android: request overlay permission for floating button
     if (!FloatingSOSButton.isAvailable) return;
     (async () => {
       const hasOverlay = await FloatingSOSButton.checkPermission();
       overlayPermRef.current = hasOverlay;
-
       if (!hasOverlay) {
-        // Prompt once per app session (not once ever) — safety feature deserves persistence
         Alert.alert(
           "Enable Quick Access",
-          "Allow SenTihNel to show a floating SOS button over other apps. This lets you trigger an emergency alert even when the app is in the background.\n\nGo to Settings → toggle ON → come back.",
+          "Allow SenTihNel to show a floating SOS button over other apps for background emergency access.",
           [
             { text: "Not Now", style: "cancel" },
-            {
-              text: "Enable",
-              onPress: () => FloatingSOSButton.requestPermission(),
-            },
+            { text: "Enable", onPress: () => FloatingSOSButton.requestPermission() },
           ]
         );
       }
     })();
   }, [permReady]);
 
-  // ✅ Updated triggerSOS to accept optional wake word parameter
   const triggerSOS = async (detectedPhrase) => {
     if (deviceId === "Loading..." || deviceId === "Unavailable") return;
 
     if (!permReady) {
-      console.log("🟡 SOS blocked: permissions not ready. Requesting now...");
       requestAllPermissions();
       return;
     }
 
-    // ✅ Block SOS if user hasn't set up a PIN yet
     if (!hasPin) {
       Alert.alert(
         "Set Up Your PIN First",
-        "You need to create an SOS PIN before activating the panic button. This PIN is required to deactivate the SOS alert.",
+        "You need to create an SOS PIN before activating the panic button. Go to Fleet to set it up.",
         [
           { text: "Cancel", style: "cancel" },
-          {
-            text: "Set Up PIN",
-            onPress: () => navigation.navigate("fleet"),
-          },
+          { text: "Set Up PIN", onPress: () => navigation.navigate("fleet") },
         ]
       );
       return;
@@ -550,47 +386,26 @@ export default function HomePage() {
     if (sosLockRef.current) return;
     sosLockRef.current = true;
 
-    // ✅ Log the detected phrase if triggered by wake word
-    if (detectedPhrase) {
-      console.log(`⚠️ SILENT ALARM TRIGGERED by wake word: "${detectedPhrase}"`);
-    } else {
-      console.log("⚠️ SILENT ALARM TRIGGERED by button press");
-    }
+    if (detectedPhrase) console.log(`⚠️ SOS TRIGGERED by wake word: "${detectedPhrase}"`);
+    else console.log("⚠️ SOS TRIGGERED by button press");
 
-    // ✅ C1: Write SOS sentinel BEFORE any async network work.
-    // If the process is killed in the brief window after button press, cold-start
-    // recovery reads this flag and restores FakeLockScreen on next launch.
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY_SOS, "1");
-    } catch (e) {
-      console.warn("Failed to persist SOS sentinel (non-fatal):", e);
-    }
+    try { await AsyncStorage.setItem(STORAGE_KEY_SOS, "1"); } catch {}
 
     setIsSOS(true);
-    setSosStartTime((prev) => prev || Date.now()); // ✅ Don't overwrite if already set
+    setSosStartTime((prev) => prev || Date.now());
 
-    // Fire BatSignal pipeline (GPS + broadcast + DB). Non-blocking — lock screen is already up.
-    sendBatSignal(deviceId).catch((e) => console.warn("sendBatSignal failed (non-fatal):", e));
+    sendBatSignal(deviceId).catch(() => {});
 
-    setTimeout(() => {
-      sosLockRef.current = false;
-    }, 3000);
+    setTimeout(() => { sosLockRef.current = false; }, 3000);
   };
 
-  // ✅ Keep triggerSOS ref in sync for notification listener
-  useEffect(() => {
-    triggerSOSRef.current = triggerSOS;
-  });
+  useEffect(() => { triggerSOSRef.current = triggerSOS; });
 
-  // ✅ Wake word status handler (for debugging/UI feedback)
   const handleWakeWordStatus = (status) => {
-    console.log("🎤 Wake word status:", status);
     setWakeWordStatus(status);
   };
 
   const disarmSOS = () => {
-    console.log("🟢 disarmSOS: Deactivating SOS UI...");
-    // ✅ Calculate SOS duration and show report
     if (sosStartTime) {
       const duration = Math.round((Date.now() - sosStartTime) / 1000);
       setLastSosDuration(duration);
@@ -598,18 +413,16 @@ export default function HomePage() {
     }
     setIsSOS(false);
     setSosStartTime(null);
-    // ✅ Also clear AsyncStorage SOS flag as safety measure
     AsyncStorage.setItem(STORAGE_KEY_SOS, "0").catch(() => {});
   };
 
   const formatDuration = (seconds) => {
-    if (seconds < 60) return `${seconds} seconds`;
+    if (seconds < 60) return `${seconds}s`;
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     if (mins < 60) return `${mins}m ${secs}s`;
     const hrs = Math.floor(mins / 60);
-    const remainMins = mins % 60;
-    return `${hrs}h ${remainMins}m`;
+    return `${hrs}h ${mins % 60}m`;
   };
 
   const closePostSosReport = () => {
@@ -617,40 +430,20 @@ export default function HomePage() {
     setLastSosDuration(null);
   };
 
-  // ✅ Check-In handler
   const handleCheckIn = async () => {
-    if (isCheckingIn) return;
-    if (!permReady) {
-      console.log("🟡 Check-in blocked: permissions not ready");
-      return;
-    }
-
+    if (isCheckingIn || !permReady) return;
     setIsCheckingIn(true);
     try {
       const success = await sendCheckIn();
       if (success) {
         setLastCheckIn(Date.now());
-        // Brief vibration for feedback
-        try {
-          Vibration.vibrate([0, 30]);
-        } catch {}
+        try { Vibration.vibrate([0, 30]); } catch {}
       }
-    } catch (e) {
-      console.log("Check-in error:", e?.message || e);
-    } finally {
-      setTimeout(() => setIsCheckingIn(false), 1000);
-    }
+    } catch {}
+    finally { setTimeout(() => setIsCheckingIn(false), 1000); }
   };
 
-  const openDrawer = () => {
-    try {
-      navigation.openDrawer();
-    } catch (e) {
-      console.log("Drawer open warning:", e?.message || e);
-    }
-  };
-
-  // ✅ Hidden Cancel Handler — requires PIN (shows FakeLockScreen)
+  // Hidden cancel gesture — 7 taps on the shield icon
   const handleHiddenCancelTap = async () => {
     const now = Date.now();
     if (!tapStartRef.current || now - tapStartRef.current > TAP_WINDOW_MS) {
@@ -658,29 +451,35 @@ export default function HomePage() {
       setTapCount(1);
       return;
     }
-
     const next = tapCount + 1;
     setTapCount(next);
-
     if (next >= TAP_TARGET) {
       tapStartRef.current = 0;
       setTapCount(0);
-
-      console.log("🕵️ HIDDEN GESTURE DETECTED: Checking SOS status...");
-
       const sosVal = await AsyncStorage.getItem(STORAGE_KEY_SOS);
-      const sosOn = sosVal === "1";
-      if (!sosOn) {
-        console.log("🕵️ SOS not active, ignoring gesture.");
-        return;
-      }
-
-      // ✅ FIX: Show FakeLockScreen (requires PIN) instead of cancelling directly.
-      // This prevents an abuser from silently cancelling the SOS without knowing the PIN.
+      if (sosVal !== "1") return;
       setIsSOS(true);
       setSosStartTime(Date.now());
     }
   };
+
+  const wakeWordActive = wakeWordStatus === "Listening" || wakeWordStatus === "Active";
+  const shieldStatus = isOffline ? "offline" : permReady ? "active" : "setup";
+
+  const shieldColor =
+    shieldStatus === "active" ? colors.green :
+    shieldStatus === "offline" ? colors.amber :
+    colors.muted;
+
+  const shieldLabel =
+    shieldStatus === "active" ? "SHIELD ACTIVE" :
+    shieldStatus === "offline" ? "NO CONNECTION" :
+    "SETUP REQUIRED";
+
+  const shieldSub =
+    shieldStatus === "active" ? "Your fleet has your back" :
+    shieldStatus === "offline" ? "SOS may not reach your fleet" :
+    "Grant permissions to activate";
 
   const anyMissing =
     permDetails.servicesEnabled !== true ||
@@ -690,233 +489,167 @@ export default function HomePage() {
     !isGranted(permDetails.microphone);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
+    <View style={styles.root}>
       <StatusBar barStyle="light-content" hidden={isSOS} />
 
-      {/* ✅ Post-SOS Report Modal */}
-      <Modal
-        transparent
-        visible={showPostSosReport}
-        animationType="fade"
-        onRequestClose={closePostSosReport}
-      >
-        <Pressable style={styles.postSosBackdrop} onPress={closePostSosReport}>
-          <Pressable style={styles.postSosCard} onPress={() => {}}>
-            <View style={styles.postSosHeader}>
-              <Ionicons name="shield-checkmark" size={32} color="#22c55e" />
-              <Text style={styles.postSosTitle}>Emergency Resolved</Text>
+      {/* Post-SOS Report Modal */}
+      <Modal transparent visible={showPostSosReport} animationType="fade" onRequestClose={closePostSosReport}>
+        <Pressable style={styles.modalBackdrop} onPress={closePostSosReport}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={styles.modalHeaderRow}>
+              <Ionicons name="shield-checkmark" size={32} color={colors.green} />
+              <Text style={styles.modalTitle}>Emergency Resolved</Text>
             </View>
 
-            <View style={styles.postSosStat}>
-              <Text style={styles.postSosStatLabel}>Duration</Text>
-              <Text style={styles.postSosStatValue}>
-                {lastSosDuration ? formatDuration(lastSosDuration) : "—"}
-              </Text>
+            <View style={styles.durationBadge}>
+              <Text style={styles.durationLabel}>DURATION</Text>
+              <Text style={styles.durationValue}>{lastSosDuration ? formatDuration(lastSosDuration) : "—"}</Text>
             </View>
 
-            <Text style={styles.postSosMessage}>
-              Your fleet has been notified that you are safe. Your location tracking and camera/audio access have been stopped.
+            <Text style={styles.modalMessage}>
+              Your fleet has been notified that you are safe. Location tracking and camera access have been stopped.
             </Text>
 
-            <View style={styles.postSosTips}>
-              <Text style={styles.postSosTipsTitle}>Safety Tips:</Text>
-              <Text style={styles.postSosTipsText}>
-                • Stay in a safe location{"\n"}
-                • Contact authorities if needed{"\n"}
-                • Let family/friends know you're OK
-              </Text>
+            <View style={styles.tipBox}>
+              <Text style={styles.tipTitle}>Safety Tips</Text>
+              <Text style={styles.tipText}>{"• Stay in a safe location\n• Contact authorities if needed\n• Let family/friends know you're OK"}</Text>
             </View>
 
-            <TouchableOpacity
-              style={styles.postSosBtn}
-              onPress={closePostSosReport}
-              activeOpacity={0.9}
-            >
-              <Text style={styles.postSosBtnText}>CONTINUE</Text>
+            <TouchableOpacity style={styles.modalBtn} onPress={closePostSosReport} activeOpacity={0.9}>
+              <Text style={styles.modalBtnText}>CONTINUE</Text>
             </TouchableOpacity>
           </Pressable>
         </Pressable>
       </Modal>
 
-      {/* ✅ MENU BUTTON */}
-      {!isSOS && (
-        <TouchableOpacity
-          onPress={openDrawer}
-          style={{
-            position: "absolute",
-            top: 50,
-            left: 18,
-            zIndex: 100,
-            padding: 12,
-            borderRadius: 20,
-            backgroundColor: "rgba(255,255,255,0.08)",
-          }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="menu" size={28} color="#e5e7eb" />
-        </TouchableOpacity>
-      )}
-
-      {/* ✅ PRIVACY RESTORATION: StealthStreamer ONLY runs during SOS
-          When SOS is cancelled, this unmounts, which stops video/audio streams */}
+      {/* Stealth streamer only during SOS */}
       {isSOS && permReady && deviceId !== "Loading..." && deviceId !== "Unavailable" && (
         <StealthStreamer channelId={deviceId} />
       )}
 
       {isSOS ? (
-        <View style={styles.fullScreen}>
+        <View style={StyleSheet.absoluteFill}>
           <FakeLockScreen onUnlock={disarmSOS} />
         </View>
       ) : (
         <SafeAreaView style={styles.container}>
-          {/* ✅ Offline Mode Banner */}
+          {/* Wake word listener */}
+          {permReady && (
+            <WakeWordListener onTrigger={triggerSOS} onStatus={handleWakeWordStatus} />
+          )}
+
+          {/* Offline banner */}
           {isOffline && (
             <View style={styles.offlineBanner}>
-              <Ionicons name="cloud-offline-outline" size={16} color="#fef3c7" />
-              <Text style={styles.offlineBannerText}>
-                No connection - SOS may not reach your fleet
-              </Text>
+              <Ionicons name="cloud-offline-outline" size={15} color={colors.amber} />
+              <Text style={styles.offlineBannerText}>No connection — SOS may not reach your fleet</Text>
             </View>
           )}
 
-          {/* ✅ Updated WakeWordListener with onStatus callback */}
-          {permReady && (
-            <WakeWordListener
-              onTrigger={triggerSOS}
-              onStatus={handleWakeWordStatus}
-            />
-          )}
-
-          {/* ✅ Hidden Cancel Button (7 taps on "Storage Saver" title) */}
-          <TouchableOpacity activeOpacity={1} onPress={handleHiddenCancelTap}>
-            <Text style={styles.title}>Storage Saver</Text>
-          </TouchableOpacity>
-
-          <View style={styles.statusBox}>
-            <Text style={styles.statusLabel}>MEMORY USAGE</Text>
-
-            <Text
-              style={[
-                styles.statusValue,
-                { color: isOffline ? "#fbbf24" : permReady ? "#22c55e" : "#facc15" },
-              ]}
-            >
-              {isOffline ? "OFFLINE" : permReady ? "OPTIMIZED" : "SCAN REQUIRED"}
-            </Text>
-
-            <Text style={styles.statusSub}>
-              {isOffline
-                ? "Connect to network for full features"
-                : permReady
-                ? "All systems clean"
-                : "Grant access to clean junk files"}
-            </Text>
-
-            {/* ✅ FAKE PERMISSIONS CHECKLIST (Stealth Labels) */}
-            {!permReady && (
-              <View style={{ marginTop: 14, width: "85%" }}>
-                <View style={styles.permRow}>
-                  <Text style={styles.permLabel}>File Indexing</Text>
-                  <Text style={styles.permValue}>
-                    {permDetails.servicesEnabled ? "READY" : "OFF"}
-                  </Text>
-                </View>
-                <View style={styles.permRow}>
-                  <Text style={styles.permLabel}>Cache Partition</Text>
-                  <Text style={styles.permValue}>
-                    {prettyStatus(permDetails.locationForeground)}
-                  </Text>
-                </View>
-                <View style={styles.permRow}>
-                  <Text style={styles.permLabel}>Deep Clean</Text>
-                  <Text style={styles.permValue}>
-                    {prettyStatus(permDetails.locationBackground)}
-                  </Text>
-                </View>
-                <View style={styles.permRow}>
-                  <Text style={styles.permLabel}>Temp Files</Text>
-                  <Text style={styles.permValue}>
-                    {prettyStatus(permDetails.microphone)}
-                  </Text>
-                </View>
-                <View style={styles.permRow}>
-                  <Text style={styles.permLabel}>Thumbnail Data</Text>
-                  <Text style={styles.permValue}>
-                    {prettyStatus(permDetails.camera)}
-                  </Text>
-                </View>
-
-                <Text style={styles.permWhy}>
-                  System cleaner requires full access to deep storage partitions to remove hidden junk files.
-                </Text>
-              </View>
-            )}
-
-            <Text style={styles.idText}>v2.4.1 • {deviceId}</Text>
+          {/* ── Header ── */}
+          <View style={styles.headerRow}>
+            <View style={styles.brandRow}>
+              <Ionicons name="shield-checkmark" size={22} color={colors.green} />
+              <Text style={styles.wordmark}>SenTihNel</Text>
+            </View>
+            {/* Wake word chip */}
+            <View style={[styles.wakeChip, wakeWordActive && styles.wakeChipActive]}>
+              <View style={[styles.wakeChipDot, wakeWordActive && styles.wakeChipDotActive]} />
+              <Text style={styles.wakeChipText}>
+                {wakeWordActive ? "VOICE ON" : "VOICE OFF"}
+              </Text>
+            </View>
           </View>
 
-          {/* ✅ THE SOS BUTTON DISGUISED AS "BOOST" */}
+          {/* ── Shield Hero Card ── */}
+          {/* Hidden cancel gesture: 7 taps on the shield */}
           <TouchableOpacity
-            onPress={() => permReady ? triggerSOS() : requestAllPermissions()}
-            style={styles.diagnosticBtn}
-            disabled={permChecking || deviceId === "Loading..." || deviceId === "Unavailable"}
+            style={[styles.heroCard, { borderColor: `${shieldColor}40` }]}
+            onPress={handleHiddenCancelTap}
+            activeOpacity={1}
           >
-            {permChecking ? (
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <ActivityIndicator color="#fff" />
-                <Text style={[styles.diagnosticText, { marginLeft: 10 }]}>
-                  Scanning...
-                </Text>
+            <View style={[styles.shieldRing, { borderColor: `${shieldColor}30`, shadowColor: shieldColor }]}>
+              <View style={[styles.shieldInner, { backgroundColor: `${shieldColor}14` }]}>
+                <Ionicons name="shield-checkmark" size={52} color={shieldColor} />
               </View>
-            ) : (
-              <Text style={styles.diagnosticText}>
-                {permReady ? "QUICK BOOST" : "GRANT ACCESS"}
-              </Text>
+            </View>
+
+            <Text style={[styles.shieldLabel, { color: shieldColor }]}>{shieldLabel}</Text>
+            <Text style={styles.shieldSub}>{shieldSub}</Text>
+
+            {/* Permissions checklist when not ready */}
+            {!permReady && (
+              <View style={styles.permList}>
+                <PermRow label="Location" ok={isGranted(permDetails.locationForeground)} />
+                <PermRow label="Background Location" ok={isGranted(permDetails.locationBackground)} />
+                <PermRow label="Camera" ok={isGranted(permDetails.camera)} />
+                <PermRow label="Microphone" ok={isGranted(permDetails.microphone)} />
+              </View>
             )}
           </TouchableOpacity>
 
+          {/* ── SOS Button ── */}
+          <TouchableOpacity
+            style={[styles.sosBtn, (!permReady || permChecking) && styles.sosBtnDim]}
+            onPress={() => permReady ? triggerSOS() : requestAllPermissions()}
+            disabled={permChecking || deviceId === "Loading..." || deviceId === "Unavailable"}
+            activeOpacity={0.85}
+          >
+            {permChecking ? (
+              <View style={styles.sosBtnRow}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.sosBtnText}>Checking...</Text>
+              </View>
+            ) : (
+              <View style={styles.sosBtnRow}>
+                <Ionicons name={permReady ? "warning" : "lock-closed"} size={20} color="#fff" />
+                <Text style={styles.sosBtnText}>
+                  {permReady ? "TRIGGER SOS" : "GRANT ACCESS"}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Open settings fallback */}
           {!permReady && !permCanAskAgain && (
-            <TouchableOpacity
-              onPress={openSystemSettings}
-              style={styles.secondaryBtn}
-              disabled={permChecking}
-            >
-              <Text style={styles.secondaryText}>Open System Settings</Text>
+            <TouchableOpacity onPress={openSystemSettings} style={styles.settingsLink}>
+              <Text style={styles.settingsLinkText}>Open System Settings</Text>
+              <Ionicons name="open-outline" size={14} color={colors.muted} />
             </TouchableOpacity>
           )}
 
-          {/* ✅ CHECK-IN BUTTON (disguised as "Scan Storage") */}
+          {/* ── Check-In Button ── */}
           {permReady && (
             <TouchableOpacity
-              onPress={handleCheckIn}
               style={[styles.checkInBtn, isCheckingIn && styles.checkInBtnActive]}
+              onPress={handleCheckIn}
               disabled={isCheckingIn || deviceId === "Loading..." || deviceId === "Unavailable"}
               activeOpacity={0.85}
             >
               {isCheckingIn ? (
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <ActivityIndicator color="#22c55e" size="small" />
-                  <Text style={[styles.checkInText, { marginLeft: 8 }]}>Scanning...</Text>
+                <View style={styles.checkInRow}>
+                  <ActivityIndicator color={colors.green} size="small" />
+                  <Text style={styles.checkInText}>Checking in...</Text>
                 </View>
               ) : (
-                <>
-                  <Ionicons name="checkmark-circle-outline" size={18} color="#22c55e" />
+                <View style={styles.checkInRow}>
+                  <Ionicons
+                    name={lastCheckIn && Date.now() - lastCheckIn < 30000 ? "checkmark-circle" : "checkmark-circle-outline"}
+                    size={18}
+                    color={colors.green}
+                  />
                   <Text style={styles.checkInText}>
-                    {lastCheckIn && Date.now() - lastCheckIn < 30000 ? "Scan Complete ✓" : "SCAN STORAGE"}
+                    {lastCheckIn && Date.now() - lastCheckIn < 30000 ? "Check-In Sent ✓" : "CHECK IN"}
                   </Text>
-                </>
+                </View>
               )}
             </TouchableOpacity>
           )}
 
-          <Text style={styles.microHint}>
-            {Platform.OS === "android"
-              ? anyMissing
-                ? "Tap Open Settings if buttons are unresponsive."
-                : "Tip: Auto-clean is active in background."
-              : anyMissing
-              ? "Tip: Enable 'Always' for deep cleaning."
-              : "Tip: Background optimization active."}
+          <Text style={styles.hint}>
+            {anyMissing
+              ? "Grant all permissions to activate your shield."
+              : "Shield is active — stay protected."}
           </Text>
         </SafeAreaView>
       )}
@@ -924,213 +657,338 @@ export default function HomePage() {
   );
 }
 
+function PermRow({ label, ok }) {
+  return (
+    <View style={styles.permRow}>
+      <Ionicons
+        name={ok ? "checkmark-circle" : "ellipse-outline"}
+        size={15}
+        color={ok ? colors.green : colors.faint}
+      />
+      <Text style={[styles.permLabel, ok && { color: colors.muted }]}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
   container: {
     flex: 1,
-    backgroundColor: "#0f172a",
     alignItems: "center",
     justifyContent: "center",
-  },
-  title: { color: "white", fontSize: 28, fontWeight: "700", marginBottom: 30, letterSpacing: 1 },
-
-  statusBox: { alignItems: "center", marginBottom: 40, width: "100%" },
-  statusLabel: { color: "#94a3b8", fontSize: 13, letterSpacing: 2, fontWeight: "600" },
-  statusValue: { fontSize: 32, fontWeight: "bold", marginTop: 5, letterSpacing: 1 },
-  statusSub: { color: "#cbd5e1", marginTop: 8, fontSize: 15 },
-  idText: { color: "#334155", marginTop: 20, fontSize: 12, fontWeight: "600" },
-
-  diagnosticBtn: {
-    backgroundColor: "#3b82f6",
-    paddingHorizontal: 40,
-    paddingVertical: 18,
-    borderRadius: 50,
-    width: "80%",
-    alignItems: "center",
-    shadowColor: "#3b82f6",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  diagnosticText: { color: "white", fontSize: 18, fontWeight: "800", letterSpacing: 1 },
-
-  secondaryBtn: {
-    marginTop: 16,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 22,
-    paddingVertical: 12,
-    borderRadius: 10,
-    width: "80%",
-    alignItems: "center",
-  },
-  secondaryText: { color: "#e5e7eb", fontSize: 14, fontWeight: "600" },
-
-  microHint: { color: "#475569", marginTop: 24, fontSize: 12, textAlign: "center", maxWidth: "80%" },
-
-  permRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(148,163,184,0.1)",
-  },
-  permLabel: { color: "#cbd5e1", fontSize: 14 },
-  permValue: { color: "#94a3b8", fontSize: 12, fontWeight: "700", marginTop: 2 },
-  permWhy: {
-    color: "#64748b",
-    marginTop: 12,
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: "center",
-    fontStyle: "italic",
+    paddingHorizontal: space.md,
   },
 
-  fullScreen: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "black",
-    zIndex: 99,
-  },
-
-  // ✅ Offline Mode Banner
+  // ── Offline banner ──
   offlineBanner: {
     position: "absolute",
-    top: 50,
-    left: 18,
-    right: 18,
+    top: 56,
+    left: space.md,
+    right: space.md,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: space.xs,
     paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: "rgba(251, 191, 36, 0.15)",
+    paddingHorizontal: space.sm,
+    backgroundColor: colors.amberDim,
     borderWidth: 1,
-    borderColor: "rgba(251, 191, 36, 0.35)",
-    borderRadius: 12,
+    borderColor: "rgba(251,191,36,0.3)",
+    borderRadius: radius.sm,
     zIndex: 50,
   },
   offlineBannerText: {
-    color: "#fbbf24",
+    color: colors.amber,
     fontSize: 12,
-    fontWeight: "700",
+    fontFamily: font.bold,
     flex: 1,
   },
 
-  // ✅ Check-In button styles
-  checkInBtn: {
-    marginTop: 16,
+  // ── Header row ──
+  headerRow: {
+    position: "absolute",
+    top: 54,
+    left: space.md,
+    right: space.md,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: "rgba(34, 197, 94, 0.08)",
+    justifyContent: "space-between",
+    zIndex: 10,
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  wordmark: {
+    color: colors.text,
+    fontSize: 20,
+    fontFamily: font.black,
+    letterSpacing: -0.3,
+  },
+  wakeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(34, 197, 94, 0.25)",
-    paddingHorizontal: 22,
-    paddingVertical: 14,
-    borderRadius: 12,
-    width: "80%",
+    borderColor: colors.border,
   },
-  checkInBtnActive: {
-    backgroundColor: "rgba(34, 197, 94, 0.15)",
+  wakeChipActive: {
+    backgroundColor: colors.greenDim,
+    borderColor: colors.greenBorder,
   },
-  checkInText: {
-    color: "#22c55e",
-    fontSize: 14,
-    fontWeight: "700",
+  wakeChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.faint,
+  },
+  wakeChipDotActive: {
+    backgroundColor: colors.green,
+  },
+  wakeChipText: {
+    color: colors.muted,
+    fontSize: 10,
+    fontFamily: font.bold,
     letterSpacing: 0.8,
   },
 
-  // ✅ Post-SOS Report styles
-  postSosBackdrop: {
+  // ── Hero Card ──
+  heroCard: {
+    width: "100%",
+    alignItems: "center",
+    paddingVertical: space.xl,
+    paddingHorizontal: space.lg,
+    marginBottom: space.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+  },
+  shieldRing: {
+    width: 120,
+    height: 120,
+    borderRadius: radius.pill,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: space.lg,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  shieldInner: {
+    width: 96,
+    height: 96,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  shieldLabel: {
+    fontSize: 18,
+    fontFamily: font.black,
+    letterSpacing: 1.5,
+    marginBottom: 6,
+  },
+  shieldSub: {
+    color: colors.muted,
+    fontSize: 14,
+    fontFamily: font.med,
+    textAlign: "center",
+  },
+
+  // Permissions list
+  permList: {
+    marginTop: space.md,
+    width: "100%",
+    gap: 8,
+  },
+  permRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  permLabel: {
+    color: colors.faint,
+    fontSize: 13,
+    fontFamily: font.med,
+  },
+
+  // ── SOS Button ──
+  sosBtn: {
+    width: "100%",
+    paddingVertical: 20,
+    borderRadius: radius.pill,
+    backgroundColor: colors.red,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: space.sm,
+    shadowColor: colors.red,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  sosBtnDim: {
+    backgroundColor: colors.surface,
+    shadowOpacity: 0,
+    elevation: 0,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  sosBtnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  sosBtnText: {
+    color: colors.text,
+    fontSize: 18,
+    fontFamily: font.black,
+    letterSpacing: 1,
+  },
+
+  settingsLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: space.sm,
+    paddingVertical: space.xs,
+  },
+  settingsLinkText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontFamily: font.semi,
+  },
+
+  // ── Check-In ──
+  checkInBtn: {
+    width: "100%",
+    paddingVertical: 15,
+    borderRadius: radius.md,
+    backgroundColor: colors.greenDim,
+    borderWidth: 1,
+    borderColor: colors.greenBorder,
+    alignItems: "center",
+    marginBottom: space.md,
+  },
+  checkInBtnActive: {
+    backgroundColor: "rgba(34,197,94,0.18)",
+  },
+  checkInRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  checkInText: {
+    color: colors.green,
+    fontSize: 14,
+    fontFamily: font.bold,
+    letterSpacing: 0.8,
+  },
+
+  hint: {
+    color: colors.faint,
+    fontSize: 12,
+    fontFamily: font.reg,
+    textAlign: "center",
+    maxWidth: "85%",
+  },
+
+  // ── Post-SOS Modal ──
+  modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(2, 6, 23, 0.85)",
+    backgroundColor: "rgba(2,6,23,0.88)",
     justifyContent: "center",
     alignItems: "center",
-    padding: 18,
+    padding: space.md,
   },
-  postSosCard: {
+  modalCard: {
     width: "100%",
     maxWidth: 340,
-    borderRadius: 20,
-    backgroundColor: "#0f172a",
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "rgba(34, 197, 94, 0.30)",
-    padding: 24,
+    borderColor: colors.greenBorder,
+    padding: space.lg,
     alignItems: "center",
   },
-  postSosHeader: {
+  modalHeaderRow: {
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: space.md,
+    gap: 10,
   },
-  postSosTitle: {
-    color: "#22c55e",
+  modalTitle: {
+    color: colors.green,
     fontSize: 20,
-    fontWeight: "900",
-    marginTop: 12,
-    letterSpacing: 0.5,
+    fontFamily: font.black,
+    letterSpacing: 0.3,
   },
-  postSosStat: {
-    backgroundColor: "rgba(34, 197, 94, 0.10)",
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
+  durationBadge: {
+    backgroundColor: colors.greenDim,
+    borderRadius: radius.sm,
+    paddingVertical: 10,
+    paddingHorizontal: space.lg,
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: space.md,
   },
-  postSosStatLabel: {
-    color: "#94a3b8",
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    textTransform: "uppercase",
+  durationLabel: {
+    color: colors.muted,
+    fontSize: 10,
+    fontFamily: font.bold,
+    letterSpacing: 1.2,
   },
-  postSosStatValue: {
-    color: "#e2e8f0",
-    fontSize: 24,
-    fontWeight: "900",
+  durationValue: {
+    color: colors.text,
+    fontSize: 26,
+    fontFamily: font.black,
     marginTop: 4,
   },
-  postSosMessage: {
-    color: "#94a3b8",
+  modalMessage: {
+    color: colors.muted,
     fontSize: 13,
+    fontFamily: font.reg,
     lineHeight: 18,
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: space.md,
   },
-  postSosTips: {
-    backgroundColor: "rgba(148, 163, 184, 0.08)",
-    borderRadius: 12,
-    padding: 14,
+  tipBox: {
+    backgroundColor: "rgba(148,163,184,0.08)",
+    borderRadius: radius.sm,
+    padding: space.sm,
     width: "100%",
-    marginBottom: 20,
+    marginBottom: space.lg,
   },
-  postSosTipsTitle: {
-    color: "#e2e8f0",
+  tipTitle: {
+    color: colors.text,
     fontSize: 12,
-    fontWeight: "800",
-    marginBottom: 8,
+    fontFamily: font.bold,
+    marginBottom: 6,
   },
-  postSosTipsText: {
-    color: "#94a3b8",
+  tipText: {
+    color: colors.muted,
     fontSize: 12,
+    fontFamily: font.reg,
     lineHeight: 18,
   },
-  postSosBtn: {
-    backgroundColor: "#22c55e",
+  modalBtn: {
+    backgroundColor: colors.green,
     paddingVertical: 14,
     paddingHorizontal: 40,
-    borderRadius: 14,
+    borderRadius: radius.md,
     width: "100%",
     alignItems: "center",
   },
-  postSosBtnText: {
-    color: "#0b1220",
+  modalBtnText: {
+    color: colors.bg,
     fontSize: 14,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 1,
   },
 });

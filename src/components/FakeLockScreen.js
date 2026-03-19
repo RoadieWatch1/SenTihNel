@@ -12,6 +12,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { cancelBatSignal } from "../services/BatSignal";
 import { supabase } from "../lib/supabase";
 import { hashPin, pinHashKey, pinLockKey, pinLockLevelKey } from "../utils/pinHash";
+import { colors, font, radius } from "../theme";
 
 // Prefer SecureStore for PIN hash (encrypted on device); fall back to AsyncStorage
 let SecureStore = null;
@@ -399,7 +400,7 @@ export default function FakeLockScreen({ onUnlock }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.95)",
+    backgroundColor: colors.bg,
   },
   displayArea: {
     flex: 1,
@@ -408,43 +409,60 @@ const styles = StyleSheet.create({
     paddingTop: 60,
   },
   message: {
-    color: "white",
-    fontSize: 20,
-    marginBottom: 20,
-    fontWeight: "500",
+    color: colors.text,
+    fontSize: 18,
+    marginBottom: 28,
+    fontFamily: font.semi,
     textAlign: "center",
+    paddingHorizontal: 32,
   },
   dotContainer: {
     flexDirection: "row",
-    gap: 20,
+    gap: 22,
   },
-  dot: { width: 15, height: 15, borderRadius: 10, borderWidth: 1, borderColor: "white" },
-  filledDot: { backgroundColor: "white" },
+  dot: {
+    width: 18,
+    height: 18,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    shadowColor: colors.green,
+    shadowOpacity: 0,
+    shadowRadius: 6,
+  },
+  filledDot: {
+    backgroundColor: colors.text,
+    borderColor: colors.text,
+    shadowOpacity: 0.5,
+  },
   keypad: {
     flex: 1,
     justifyContent: "flex-end",
     paddingHorizontal: 40,
-    paddingBottom: 40,
+    paddingBottom: 44,
   },
-  row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 20 },
+  row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 18 },
   key: {
     width: 75,
     height: 75,
-    borderRadius: 40,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
     justifyContent: "center",
     alignItems: "center",
   },
   keyDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
-  keyText: { color: "white", fontSize: 28, fontWeight: "400" },
+  keyText: { color: colors.text, fontSize: 28, fontFamily: font.med },
   submitKey: {
-    backgroundColor: "rgba(76, 175, 80, 0.25)",
+    backgroundColor: colors.greenDim,
     borderWidth: 1,
-    borderColor: "rgba(76, 175, 80, 0.5)",
+    borderColor: colors.greenBorder,
   },
   submitKeyDisabled: {
-    backgroundColor: "rgba(255,255,255,0.05)",
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderColor: colors.border,
   },
 });

@@ -41,7 +41,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useNavigation, DrawerActions } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
+import { colors, font, radius, space } from "../../src/theme";
 import * as Location from "expo-location";
 import { Camera } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
@@ -138,16 +139,9 @@ export default function FleetScreen() {
   const router = useRouter();
   const navigation = useNavigation();
 
-  // ✅ Stealth back/menu: opens the drawer menu (Access page)
   const goBackToMenu = useCallback(() => {
-    try {
-      navigation.dispatch(DrawerActions.openDrawer());
-    } catch (e) {
-      try {
-        router.replace("/(app)/home");
-      } catch {}
-    }
-  }, [navigation, router]);
+    try { router.replace("/(app)/home"); } catch {}
+  }, [router]);
 
   const [workers, setWorkers] = useState([]);
   const workersRef = useRef([]);
@@ -2154,12 +2148,16 @@ export default function FleetScreen() {
         <Pressable onLongPress={() => openMemberMenu(item)} delayLongPress={650}>
           <View style={styles.cardHeader}>
             <View style={styles.row}>
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: isSOS ? "#ef4444" : isOnline ? "#22c55e" : "#64748b" },
-                ]}
-              />
+              {/* Avatar circle with initials + status ring */}
+              <View style={[
+                styles.avatar,
+                isSOS && styles.avatarSOS,
+                isOnline && !isSOS && styles.avatarOnline,
+              ]}>
+                <Text style={styles.avatarInitials}>
+                  {String(label || "?").replace("Member • ", "")[0]?.toUpperCase() || "?"}
+                </Text>
+              </View>
               <View style={{ flexDirection: "column", flex: 1 }}>
                 <Text style={[styles.workerName, isSOS && styles.workerNameSOS]} numberOfLines={1}>
                   {label}
@@ -2782,16 +2780,16 @@ export default function FleetScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b1220" },
+  container: { flex: 1, backgroundColor: colors.bg },
   centered: {
     flex: 1,
-    backgroundColor: "#0b1220",
+    backgroundColor: colors.bg,
     justifyContent: "center",
     alignItems: "center",
   },
-  loadingText: { color: "#475569", marginTop: 12, fontSize: 12 },
+  loadingText: { color: colors.faint, marginTop: 12, fontSize: 12, fontFamily: font.reg },
 
-  header: { padding: 22, paddingTop: 56, backgroundColor: "#0f172a" },
+  header: { padding: 22, paddingTop: 56, backgroundColor: colors.surface },
 
   headerTopRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   backBtn: {
@@ -2821,9 +2819,9 @@ const styles = StyleSheet.create({
   },
   switchText: { color: "#e2e8f0", fontWeight: "900", fontSize: 12, letterSpacing: 0.4 },
 
-  headerTitle: { color: "white", fontSize: 24, fontWeight: "900", letterSpacing: 1 },
-  headerSub: { color: "#94a3b8", fontSize: 13, marginTop: 6 },
-  errorText: { color: "#fca5a5", marginTop: 10, fontSize: 12 },
+  headerTitle: { color: colors.text, fontSize: 24, fontFamily: font.black, letterSpacing: -0.3 },
+  headerSub: { color: colors.muted, fontSize: 13, marginTop: 6, fontFamily: font.reg },
+  errorText: { color: "#fca5a5", marginTop: 10, fontSize: 12, fontFamily: font.reg },
 
   // ✅ Tab Switcher Styles
   tabContainer: {
@@ -3052,38 +3050,68 @@ const styles = StyleSheet.create({
   list: { padding: 14 },
 
   card: {
-    backgroundColor: "#1e293b",
-    padding: 14,
-    borderRadius: 14,
+    backgroundColor: colors.surfaceHigh,
+    padding: 16,
+    borderRadius: radius.md,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#0f172a",
+    borderColor: colors.border,
   },
 
   cardSOS: {
-    borderColor: "#ef4444",
+    borderColor: colors.red,
     borderWidth: 2,
-    backgroundColor: "rgba(239, 68, 68, 0.10)",
+    backgroundColor: colors.redDim,
   },
 
   cardActive: {
-    borderColor: "rgba(34, 197, 94, 0.3)",
+    borderColor: colors.greenBorder,
+  },
+
+  cardBatteryCritical: {
+    borderColor: "rgba(239,68,68,0.4)",
   },
 
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   row: { flexDirection: "row", alignItems: "flex-start" },
-  statusDot: { width: 8, height: 8, borderRadius: 999, marginRight: 10, marginTop: 6 },
 
-  workerName: { color: "white", fontWeight: "900", fontSize: 16 },
+  // Avatar with status ring
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(148,163,184,0.12)",
+    borderWidth: 2,
+    borderColor: colors.faint,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    marginTop: 2,
+  },
+  avatarOnline: {
+    borderColor: colors.green,
+    backgroundColor: colors.greenDim,
+  },
+  avatarSOS: {
+    borderColor: colors.red,
+    backgroundColor: colors.redDim,
+  },
+  avatarInitials: {
+    color: colors.text,
+    fontSize: 16,
+    fontFamily: font.black,
+  },
+
+  workerName: { color: colors.text, fontFamily: font.black, fontSize: 16 },
   workerNameSOS: { color: "#fee2e2" },
 
-  subLabel: { color: "#64748b", fontSize: 12, marginTop: 2, fontWeight: "700" },
+  subLabel: { color: colors.faint, fontSize: 12, marginTop: 2, fontFamily: font.bold },
   subLabelSOS: { color: "#fecaca" },
 
   deviceLine: { color: "#475569", fontSize: 11, fontWeight: "700" },

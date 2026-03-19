@@ -1,132 +1,74 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Drawer } from "expo-router/drawer";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { Tabs } from "expo-router";
+import { View } from "react-native";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
-import {
-  DrawerContentScrollView,
-  DrawerItemList,
-} from "@react-navigation/drawer";
 import SOSAlertOverlay from "../../src/components/SOSAlertOverlay";
 import SOSAlertManager from "../../src/services/SOSAlertManager";
 import AlarmService from "../../src/services/AlarmService";
 import ForegroundService from "../../src/services/ForegroundService";
+import { colors, font } from "../../src/theme";
 
 let SecureStore = null;
 try { SecureStore = require("expo-secure-store"); } catch {}
 import { cancelBatSignal } from "../../src/services/BatSignal";
 import { clearSOS, stopLiveTracking } from "../../src/services/LiveTracker";
 
-function CustomDrawerContent(props) {
-  const router = useRouter();
+// Export logout so Settings screen can call it
+export async function performLogout(router) {
+  try { AlarmService.stopAlarm(); } catch {}
+  try { ForegroundService.stopForegroundService(); } catch {}
 
-  const handleLogout = async () => {
-    // 1) Stop alarm and foreground service immediately (no network needed)
-    try { AlarmService.stopAlarm(); } catch {}
-    try { ForegroundService.stopForegroundService(); } catch {}
+  const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
 
-    const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
+  try {
+    await Promise.race([
+      Promise.allSettled([
+        clearSOS().catch(() => {}),
+        stopLiveTracking().catch(() => {}),
+        cancelBatSignal().catch(() => {}),
+        ...(deviceId ? [
+          supabase.from("devices").update({ is_active: false }).eq("device_id", deviceId).then(() => {}),
+          supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId).then(() => {}),
+          supabase.from("push_tokens").delete().eq("device_id", deviceId).then(() => {}),
+        ] : []),
+        AsyncStorage.removeItem("sentinel_pin_hash").catch(() => {}),
+        (async () => { try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {} })(),
+      ]),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
+  } catch {}
 
-    // 2) All cleanup + DB deactivation runs in PARALLEL with a single 2s hard cap.
-    try {
-      await Promise.race([
-        Promise.allSettled([
-          clearSOS().catch(() => {}),
-          stopLiveTracking().catch(() => {}),
-          cancelBatSignal().catch(() => {}),
-          ...(deviceId ? [
-            supabase.from("devices").update({ is_active: false }).eq("device_id", deviceId).then(() => {}),
-            supabase.from("tracking_sessions").update({ status: "OFFLINE", last_updated: new Date().toISOString() }).eq("device_id", deviceId).then(() => {}),
-            supabase.from("push_tokens").delete().eq("device_id", deviceId).then(() => {}),
-          ] : []),
-          // Clear PIN hash on logout (prevents cross-account PIN reuse)
-          AsyncStorage.removeItem("sentinel_pin_hash").catch(() => {}),
-          (async () => { try { if (SecureStore?.deleteItemAsync) await SecureStore.deleteItemAsync("sentinel_pin_hash"); } catch {} })(),
-        ]),
-        new Promise((r) => setTimeout(r, 2000)), // 2s hard cap — then sign out regardless
-      ]);
-    } catch {}
+  try {
+    await AsyncStorage.multiRemove([
+      "sentinel_group_id",
+      "sentinel_invite_code",
+      "sentinel_selected_fleet_type",
+    ]);
+  } catch {}
 
-    // 3) Clear local cached fleet context NOW (prevents cross-account bleed on re-login)
-    try {
-      await AsyncStorage.multiRemove([
-        "sentinel_group_id",
-        "sentinel_invite_code",
-        "sentinel_selected_fleet_type",
-      ]);
-    } catch {}
+  try { supabase.removeAllChannels(); } catch {}
 
-    // 4) Kill realtime channels (prevents them keeping auth "alive")
-    try { supabase.removeAllChannels(); } catch {}
+  globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
+  try { supabase.auth.stopAutoRefresh(); } catch {}
+  try {
+    await Promise.race([
+      supabase.auth.signOut({ scope: "local" }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("signOut timeout")), 6000)),
+    ]);
+  } catch (e) {
+    try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+  }
 
-    // 5) Sign out (force local — instant, no network needed)
-    globalThis.__SENTIHNEL_AUTH_REFRESH_ENABLED__ = false;
-    try { supabase.auth.stopAutoRefresh(); } catch {}
-    try {
-      await Promise.race([
-        supabase.auth.signOut({ scope: "local" }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("signOut timeout")), 6000)),
-      ]);
-    } catch (e) {
-      console.log("signOut non-fatal:", e?.message || e);
-      // worst-case fallback
-      try { await supabase.auth.signOut({ scope: "local" }); } catch {}
-    }
-
-    // 6) Route away no matter what
-    try { router.replace("/(auth)/auth"); } catch {}
-  };
-
-  return (
-    <View style={styles.drawerContainer}>
-      {/* HEADER */}
-      <View style={styles.header}>
-        <View style={styles.brandRow}>
-          <View style={styles.logoDot} />
-          <Text style={styles.brand}>SENTIHNEL</Text>
-        </View>
-
-        <View style={styles.statusRow}>
-          <View style={styles.statusPill}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>SHIELD ACTIVE</Text>
-          </View>
-          <Text style={styles.version}>v1.0.0</Text>
-        </View>
-      </View>
-
-      {/* NAV ITEMS (this is the correct way) */}
-      <DrawerContentScrollView
-        {...props}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <View style={styles.navWrap}>
-          <DrawerItemList {...props} />
-        </View>
-      </DrawerContentScrollView>
-
-      {/* FOOTER */}
-      <View style={styles.footer}>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-          <Ionicons name="log-out-outline" size={18} color="#ef4444" />
-          <Text style={styles.logoutText}>Terminate Session</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.footerHint}>
-          Tip: keep the app running for maximum protection.
-        </Text>
-      </View>
-    </View>
-  );
+  try { router.replace("/(auth)/auth"); } catch {}
 }
 
 export default function AppLayout() {
   const router = useRouter();
-  const [sosAlert, setSosAlert] = useState(null); // { deviceId, displayName, latitude, longitude }
+  const [sosAlert, setSosAlert] = useState(null);
 
-  // Initialize SOS Alert Manager
   useEffect(() => {
     let mounted = true;
 
@@ -134,7 +76,6 @@ export default function AppLayout() {
       try {
         const deviceId = await AsyncStorage.getItem("sentinel_device_id");
 
-        // ✅ Fetch ALL groups the user belongs to (member + owner)
         let allGroupIds = [];
         try {
           const { data: { user } } = await supabase.auth.getUser();
@@ -155,33 +96,23 @@ export default function AppLayout() {
           }
         } catch {}
 
-        // Fallback to current group if query failed
         if (allGroupIds.length === 0) {
           const fallbackId = await AsyncStorage.getItem("sentinel_group_id");
           if (fallbackId) allGroupIds = [fallbackId];
         }
 
-        if (allGroupIds.length === 0) {
-          console.log("AppLayout: No group IDs, skipping SOS manager init");
-          return;
-        }
+        if (allGroupIds.length === 0) return;
 
         await SOSAlertManager.initialize(allGroupIds, deviceId, {
           onSOSReceived: (data) => {
             if (!mounted) return;
-            // ✅ FIX: Don't show overlay if this incident is already suppressed
-            if (data.deviceId && SOSAlertManager.isSuppressed(data.deviceId)) {
-              console.log("AppLayout: SOS received but suppressed for", data.deviceId);
-              return;
-            }
-            console.log("AppLayout: SOS received", data);
+            if (data.deviceId && SOSAlertManager.isSuppressed(data.deviceId)) return;
             setSosAlert({
               deviceId: data.deviceId,
               displayName: data.displayName,
               latitude: data.latitude,
               longitude: data.longitude,
             });
-            // Update foreground notification to show SOS alert
             ForegroundService.updateNotification(
               "🚨 SOS ALERT ACTIVE",
               `${data.displayName || "Fleet member"} needs immediate help!`
@@ -189,33 +120,21 @@ export default function AppLayout() {
           },
           onSOSCancelled: (deviceId) => {
             if (!mounted) return;
-            console.log("AppLayout: SOS cancelled", deviceId);
-            // Clear overlay if this was the displayed alert.
-            // null deviceId = clear all (stale alert cleanup)
             setSosAlert((prev) => {
               if (!deviceId) return null;
               return prev?.deviceId === deviceId ? null : prev;
             });
-            // Restore normal notification
             ForegroundService.updateNotification(
               "🛡️ SENTIHNEL SHIELD ACTIVE",
               "Protection running - Location tracking enabled"
             ).catch(() => {});
           },
-          onSOSAcknowledged: (deviceId, byDeviceId) => {
-            console.log("AppLayout: SOS acknowledged", deviceId, "by", byDeviceId);
-          },
+          onSOSAcknowledged: () => {},
         });
 
-        console.log("AppLayout: SOS Alert Manager initialized");
-
-        // ✅ Start foreground service for all-day background operation
         try {
           await ForegroundService.startForegroundService();
-          console.log("AppLayout: Foreground service started");
-        } catch (e) {
-          console.log("AppLayout: Failed to start foreground service", e);
-        }
+        } catch {}
       } catch (e) {
         console.log("AppLayout: Failed to init SOS manager", e);
       }
@@ -226,30 +145,18 @@ export default function AppLayout() {
     return () => {
       mounted = false;
       SOSAlertManager.cleanup();
-      // Stop foreground service on unmount
       ForegroundService.stopForegroundService().catch(() => {});
     };
   }, []);
 
-  // ✅ FIX: Handle SOS alert actions using LOCAL SUPPRESSION (no DB writes)
-  // Suppression prevents overlay from re-appearing for the same incident.
-  // Alarm only restarts if there are unsuppressed alerts from OTHER devices.
-
   const handleAcknowledge = useCallback(async () => {
     if (sosAlert?.deviceId) {
-      // ✅ Suppress locally (stops alarm, prevents re-alarm, no DB write)
       await SOSAlertManager.suppressIncident(sosAlert.deviceId);
     }
-    // Check for remaining UNSUPPRESSED alerts (show next if any)
     const remaining = SOSAlertManager.getUnsuppressedAlerts();
     if (remaining.length > 0) {
       const next = remaining[0];
-      setSosAlert({
-        deviceId: next.device_id,
-        displayName: next.display_name,
-        latitude: next.latitude,
-        longitude: next.longitude,
-      });
+      setSosAlert({ deviceId: next.device_id, displayName: next.display_name, latitude: next.latitude, longitude: next.longitude });
     } else {
       setSosAlert(null);
     }
@@ -257,7 +164,6 @@ export default function AppLayout() {
 
   const handleViewLocation = useCallback(async () => {
     if (sosAlert?.deviceId) {
-      // ✅ Suppress locally BEFORE navigating (prevents overlay loop)
       await SOSAlertManager.suppressIncident(sosAlert.deviceId);
     }
     setSosAlert(null);
@@ -270,8 +176,7 @@ export default function AppLayout() {
   }, []);
 
   return (
-    <>
-      {/* SOS Alert Overlay - renders above everything */}
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <SOSAlertOverlay
         visible={sosAlert !== null}
         senderName={sosAlert?.displayName}
@@ -281,187 +186,60 @@ export default function AppLayout() {
         onDismiss={handleDismiss}
       />
 
-      <Drawer
-      drawerContent={(props) => <CustomDrawerContent {...props} />}
-      screenOptions={{
-        headerShown: false, // stealth
-        drawerStyle: {
-          backgroundColor: "#0b1220",
-          width: 290,
-        },
-        drawerActiveTintColor: "#22c55e",
-        drawerInactiveTintColor: "#94a3b8",
-        drawerLabelStyle: {
-          fontWeight: "700",
-          letterSpacing: 0.5,
-        },
-        drawerItemStyle: {
-          borderRadius: 12,
-          marginHorizontal: 12,
-          marginVertical: 4,
-        },
-        sceneContainerStyle: {
-          backgroundColor: "#0f172a",
-        },
-      }}
-    >
-      {/* These names MUST match files in app/(app)/ */}
-      <Drawer.Screen
-        name="home"
-        options={{
-          drawerLabel: "Panic Button",
-          title: "Home",
-          drawerIcon: ({ color, size }) => (
-            <Ionicons name="radio-outline" size={size} color={color} />
-          ),
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: {
+            backgroundColor: colors.surface,
+            borderTopColor: colors.border,
+            borderTopWidth: 1,
+            height: 60,
+            paddingBottom: 8,
+            paddingTop: 6,
+          },
+          tabBarActiveTintColor: colors.green,
+          tabBarInactiveTintColor: colors.muted,
+          tabBarLabelStyle: {
+            fontFamily: font.semi,
+            fontSize: 11,
+            letterSpacing: 0.3,
+          },
+          sceneStyle: { backgroundColor: colors.bg },
         }}
-      />
+      >
+        <Tabs.Screen
+          name="home"
+          options={{
+            title: "Shield",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="shield-checkmark" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="fleet"
+          options={{
+            title: "Fleet",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="people" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title: "Settings",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="settings" size={size} color={color} />
+            ),
+          }}
+        />
 
-      <Drawer.Screen
-        name="fleet"
-        options={{
-          drawerLabel: "Fleet Manager",
-          title: "Fleet",
-          drawerIcon: ({ color, size }) => (
-            <Ionicons name="people-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Drawer.Screen
-        name="manager-dashboard"
-        options={{
-          drawerLabel: "Work Dashboard",
-          title: "Work Dashboard",
-          drawerIcon: ({ color, size }) => (
-            <Ionicons name="briefcase-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Drawer.Screen
-        name="family-guide"
-        options={{
-          drawerLabel: "Family Fleet Guide",
-          title: "Family Guide",
-          drawerIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Drawer.Screen
-        name="work-guide"
-        options={{
-          drawerLabel: "Work Fleet Guide",
-          title: "Work Guide",
-          drawerIcon: ({ color, size }) => (
-            <Ionicons name="business-outline" size={size} color={color} />
-          ),
-        }}
-      />
-    </Drawer>
-    </>
+        {/* Hidden screens — not shown in tab bar */}
+        <Tabs.Screen name="manager-dashboard" options={{ href: null }} />
+        <Tabs.Screen name="family-guide" options={{ href: null }} />
+        <Tabs.Screen name="work-guide" options={{ href: null }} />
+      </Tabs>
+    </View>
   );
 }
-
-const styles = StyleSheet.create({
-  drawerContainer: { flex: 1, backgroundColor: "#0b1220" },
-
-  header: {
-    paddingHorizontal: 22,
-    paddingTop: 58,
-    paddingBottom: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1e293b",
-  },
-
-  brandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-
-  logoDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: "#22c55e",
-    shadowColor: "#22c55e",
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
-  },
-
-  brand: {
-    color: "#e2e8f0",
-    fontSize: 20,
-    fontWeight: "900",
-    letterSpacing: 3,
-  },
-
-  statusRow: {
-    marginTop: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(34, 197, 94, 0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(34, 197, 94, 0.25)",
-  },
-
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: "#22c55e",
-  },
-
-  statusText: {
-    color: "#86efac",
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 1,
-  },
-
-  version: { color: "#475569", fontSize: 12, fontWeight: "700" },
-
-  scrollContent: { paddingTop: 14 },
-
-  navWrap: {
-    paddingTop: 8,
-  },
-
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 26,
-    borderTopWidth: 1,
-    borderTopColor: "#1e293b",
-  },
-
-  logoutBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: "rgba(239, 68, 68, 0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.25)",
-  },
-
-  logoutText: { color: "#fecaca", fontWeight: "900", letterSpacing: 0.4 },
-
-  footerHint: { color: "#334155", marginTop: 10, fontSize: 11 },
-});
