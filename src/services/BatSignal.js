@@ -1075,7 +1075,50 @@ export const sendCheckIn = async () => {
     } catch {}
 
     const success = !!out && (!out.status || out.status === "ok");
-    if (success) console.log("✅ CHECK-IN: Broadcast delivered");
+    if (success) {
+      console.log("✅ CHECK-IN: Broadcast delivered");
+
+      // ✅ Fix 1: Fire-and-forget push notification so fleet with app closed also gets it
+      invokeFunctionWithTimeout(
+        SOS_NOTIFY_FN,
+        {
+          payload: {
+            device_id: deviceId,
+            display_name: displayName || null,
+            group_id: groupId,
+            latitude: Number.isFinite(lat) ? lat : null,
+            longitude: Number.isFinite(lng) ? lng : null,
+            timestamp: new Date().toISOString(),
+            type: "check_in",
+            title: "✅ Check-In",
+            body: `${displayName || "A fleet member"} checked in: I'm OK`,
+          },
+        },
+        FN_TIMEOUT_MS
+      )
+        .then((r) => {
+          if (r.ok) console.log("✅ CHECK-IN: Push notification sent");
+          else console.log("⚠️ CHECK-IN: Push notification failed (non-blocking):", r.error?.message);
+        })
+        .catch((e) => console.log("⚠️ CHECK-IN: Push exception (non-blocking):", e?.message));
+
+      // ✅ Fix 2: Record check-in in DB so fleet can see history
+      supabase
+        .rpc("upsert_tracking_session", {
+          p_device_id: deviceId,
+          p_group_id: groupId,
+          p_data: {
+            status: "CHECK_IN",
+            last_check_in: new Date().toISOString(),
+            last_updated: new Date().toISOString(),
+          },
+        })
+        .then(({ error }) => {
+          if (error) console.log("⚠️ CHECK-IN: DB record failed (non-blocking):", error.message);
+          else console.log("✅ CHECK-IN: DB record saved");
+        })
+        .catch((e) => console.log("⚠️ CHECK-IN: DB exception (non-blocking):", e?.message));
+    }
 
     return success;
   } catch (e) {

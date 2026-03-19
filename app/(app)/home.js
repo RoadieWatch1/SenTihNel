@@ -73,6 +73,7 @@ export default function HomePage() {
 
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [lastCheckIn, setLastCheckIn] = useState(null);
+  const LAST_CHECKIN_KEY = "sentinel_last_checkin";
   const [isOffline, setIsOffline] = useState(false);
   const [sosStartTime, setSosStartTime] = useState(null);
   const [showPostSosReport, setShowPostSosReport] = useState(false);
@@ -226,6 +227,12 @@ export default function HomePage() {
 
       setDeviceId(finalId);
       registerForBatSignal();
+
+      // ✅ Fix 3: Restore last check-in time across screen changes
+      try {
+        const saved = await AsyncStorage.getItem("sentinel_last_checkin");
+        if (saved) setLastCheckIn(Number(saved));
+      } catch {}
 
       try {
         const sosFlag = await AsyncStorage.getItem(STORAGE_KEY_SOS);
@@ -432,11 +439,21 @@ export default function HomePage() {
 
   const handleCheckIn = async () => {
     if (isCheckingIn || !permReady) return;
+
+    // ✅ Fix 4: Explain why the button is disabled when device ID isn't ready
+    if (deviceId === "Loading..." || deviceId === "Unavailable") {
+      Alert.alert("Not Ready", "Device identity is still loading. Please wait a moment and try again.");
+      return;
+    }
+
     setIsCheckingIn(true);
     try {
       const success = await sendCheckIn();
       if (success) {
-        setLastCheckIn(Date.now());
+        const now = Date.now();
+        setLastCheckIn(now);
+        // ✅ Fix 3: Persist so it survives screen changes
+        AsyncStorage.setItem("sentinel_last_checkin", String(now)).catch(() => {});
         try { Vibration.vibrate([0, 30]); } catch {}
       }
     } catch {}
