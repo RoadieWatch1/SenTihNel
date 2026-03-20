@@ -24,7 +24,7 @@ import { supabase } from "../lib/supabase";
 // RevenueCat API Keys (Dashboard > Project > API Keys)
 // iOS: App Store app > Public API Key
 // Android: Play Store app > Public API Key
-const REVENUECAT_API_KEY_IOS = "appl_YOUR_IOS_KEY_HERE"; // TODO: Replace with real key
+const REVENUECAT_API_KEY_IOS = "app04f09db393";
 const REVENUECAT_API_KEY_ANDROID = "goog_HFJETuXgmqZJIBmNLsfwwkheGUc";
 
 // Product IDs - Must match EXACTLY what you create in:
