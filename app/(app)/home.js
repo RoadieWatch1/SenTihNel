@@ -277,6 +277,21 @@ export default function HomePage() {
     if (permReady) startTrackerIfReady(deviceId);
   }, [permReady]);
 
+  // ── iOS Back Tap deeplink handler ──
+  // Handles sentihnel://sos — fires SOS whether app is cold-launched or backgrounded.
+  // triggerSOSRef is always current (kept in sync on every render below).
+  useEffect(() => {
+    const handleDeeplink = (url) => {
+      if (!url || !url.includes("/sos")) return;
+      if (triggerSOSRef.current) triggerSOSRef.current("back-tap");
+    };
+    // App already running (backgrounded) — catches URL while app is alive
+    const sub = Linking.addEventListener("url", ({ url }) => handleDeeplink(url));
+    // Cold launch — app opened via sentihnel://sos
+    Linking.getInitialURL().then((url) => { if (url) handleDeeplink(url); }).catch(() => {});
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     const unsubscribe = navigation.addListener("focus", async () => {
       try {

@@ -8,6 +8,8 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
+  Platform,
+  StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,7 +24,9 @@ export default function FamilyGuideScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
+    <>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack} style={styles.backBtn}>
@@ -89,8 +93,9 @@ export default function FamilyGuideScreen() {
           <View style={styles.methodContent}>
             <Text style={styles.methodTitle}>SOS Button</Text>
             <Text style={styles.methodDesc}>
-              Press the red SOS button in the app or use the floating overlay button
-              (Android only). Quick and reliable in any situation.
+              {Platform.OS === "android"
+                ? "Press the red SOS button in the app or use the floating overlay button. Quick and reliable in any situation."
+                : "Press the red SOS button in the app. For fastest off-screen access, use Back Tap (see iOS Quick Access below)."}
             </Text>
           </View>
         </View>
@@ -107,6 +112,35 @@ export default function FamilyGuideScreen() {
             </Text>
           </View>
         </View>
+
+        {/* iOS Quick Access — Back Tap */}
+        {Platform.OS === "ios" && (
+          <>
+            <Text style={styles.sectionTitle}>📱 iOS QUICK ACCESS — BACK TAP</Text>
+            <View style={styles.backTapCard}>
+              <View style={styles.backTapHeader}>
+                <Ionicons name="phone-portrait-outline" size={22} color="#fbbf24" />
+                <Text style={styles.backTapTitle}>Double Tap Back of iPhone → SOS</Text>
+              </View>
+              <Text style={styles.backTapDesc}>
+                Set this up once and you can trigger SOS from ANY screen — even if
+                SenTihNel is closed or you're in another app.
+              </Text>
+              <Text style={styles.backTapStepsTitle}>One-time setup:</Text>
+              <Text style={styles.backTapStep}>1. Open iOS Settings → Accessibility → Touch → Back Tap</Text>
+              <Text style={styles.backTapStep}>2. Tap "Double Tap"</Text>
+              <Text style={styles.backTapStep}>3. Scroll to Shortcuts → tap "New Shortcut"</Text>
+              <Text style={styles.backTapStep}>4. Add action: Open URLs → type: sentihnel://sos</Text>
+              <Text style={styles.backTapStep}>5. Save and name it "SenTihNel SOS"</Text>
+              <View style={styles.backTapNote}>
+                <Ionicons name="checkmark-circle" size={14} color="#fbbf24" />
+                <Text style={styles.backTapNoteText}>
+                  Works from lock screen, other apps, anywhere. Requires permissions granted and PIN set up.
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
 
         {/* What Happens During SOS */}
         <Text style={styles.sectionTitle}>⚡ WHAT HAPPENS DURING SOS</Text>
@@ -286,9 +320,9 @@ export default function FamilyGuideScreen() {
           </Text>
         </View>
 
-        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
+    </>
   );
 }
 
@@ -349,6 +383,7 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 14,
     lineHeight: 22,
+    fontFamily: font.reg,
   },
   sectionTitle: {
     color: "#64748b",
@@ -390,6 +425,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 8,
     fontStyle: "italic",
+    fontFamily: font.reg,
   },
   methodCard: {
     flexDirection: "row",
@@ -420,6 +456,7 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 12,
     lineHeight: 18,
+    fontFamily: font.reg,
   },
   featureCard: {
     flexDirection: "row",
@@ -450,6 +487,7 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 13,
     lineHeight: 19,
+    fontFamily: font.reg,
   },
   privacyCard: {
     flexDirection: "row",
@@ -467,6 +505,7 @@ const styles = StyleSheet.create({
     color: "#d1fae5",
     fontSize: 13,
     lineHeight: 20,
+    fontFamily: font.reg,
   },
   privacyBold: {
     fontFamily: font.black,
@@ -488,6 +527,7 @@ const styles = StyleSheet.create({
     color: "#fef3c7",
     fontSize: 12,
     lineHeight: 19,
+    fontFamily: font.reg,
   },
   permissionBold: {
     fontFamily: font.black,
@@ -527,6 +567,7 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 12,
     lineHeight: 18,
+    fontFamily: font.reg,
   },
   tipCard: {
     flexDirection: "row",
@@ -544,5 +585,62 @@ const styles = StyleSheet.create({
     color: "#fef3c7",
     fontSize: 13,
     lineHeight: 19,
+    fontFamily: font.reg,
+  },
+  backTapCard: {
+    backgroundColor: "rgba(251, 191, 36, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.30)",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 24,
+  },
+  backTapHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  backTapTitle: {
+    color: "#fbbf24",
+    fontSize: 15,
+    fontFamily: font.black,
+    flex: 1,
+  },
+  backTapDesc: {
+    color: "#fef3c7",
+    fontSize: 13,
+    lineHeight: 20,
+    fontFamily: font.reg,
+    marginBottom: 12,
+  },
+  backTapStepsTitle: {
+    color: "#fde047",
+    fontSize: 13,
+    fontFamily: font.bold,
+    marginBottom: 6,
+  },
+  backTapStep: {
+    color: "#fef3c7",
+    fontSize: 13,
+    lineHeight: 20,
+    fontFamily: font.reg,
+    marginBottom: 4,
+  },
+  backTapNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 10,
+    backgroundColor: "rgba(251, 191, 36, 0.10)",
+    borderRadius: 8,
+    padding: 10,
+  },
+  backTapNoteText: {
+    flex: 1,
+    color: "#fef3c7",
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: font.reg,
   },
 });
