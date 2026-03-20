@@ -2286,7 +2286,7 @@ export default function FleetScreen() {
           style={{ marginTop: 24, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: "#334155", borderRadius: 8 }}
           onPress={retryBoot}
         >
-          <Text style={{ color: "#e2e8f0", fontSize: 13, fontWeight: "600" }}>Tap to retry</Text>
+          <Text style={{ color: "#e2e8f0", fontSize: 13, fontFamily: font.semi }}>Tap to retry</Text>
         </TouchableOpacity>
       </View>
     );
@@ -2804,7 +2804,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(148, 163, 184, 0.16)",
     alignSelf: "flex-start",
   },
-  backText: { color: "#e2e8f0", fontWeight: "900", fontSize: 12, letterSpacing: 0.4 },
+  backText: { color: "#e2e8f0", fontFamily: font.black, fontSize: 12, letterSpacing: 0.4 },
 
   switchBtn: {
     flexDirection: "row",
@@ -2817,7 +2817,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(148, 163, 184, 0.16)",
   },
-  switchText: { color: "#e2e8f0", fontWeight: "900", fontSize: 12, letterSpacing: 0.4 },
+  switchText: { color: "#e2e8f0", fontFamily: font.black, fontSize: 12, letterSpacing: 0.4 },
 
   headerTitle: { color: colors.text, fontSize: 24, fontFamily: font.black, letterSpacing: -0.3 },
   headerSub: { color: colors.muted, fontSize: 13, marginTop: 6, fontFamily: font.reg },
@@ -2854,7 +2854,7 @@ const styles = StyleSheet.create({
   tabText: {
     color: "#64748b",
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.4,
   },
   tabTextActive: {
@@ -2890,7 +2890,7 @@ const styles = StyleSheet.create({
   },
   sosBroadcastText: {
     color: "#fee2e2",
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 0.3,
     fontSize: 12,
     flex: 1,
@@ -2911,7 +2911,7 @@ const styles = StyleSheet.create({
   },
   checkInBannerText: {
     color: "#bbf7d0",
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.3,
     fontSize: 12,
     flex: 1,
@@ -2931,7 +2931,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  fleetInfoLabel: { color: "#94a3b8", fontSize: 11, fontWeight: "800", letterSpacing: 0.6 },
+  fleetInfoLabel: { color: "#94a3b8", fontSize: 11, fontFamily: font.bold, letterSpacing: 0.6 },
 
   // ✅ Collapsible Header Styles (compact when collapsed)
   collapsibleHeader: {
@@ -2949,7 +2949,7 @@ const styles = StyleSheet.create({
   collapsibleHeaderText: {
     color: "#e2e8f0",
     fontSize: 13,
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.3,
   },
   statusBadgeGreen: {
@@ -2971,18 +2971,18 @@ const styles = StyleSheet.create({
   statusBadgeText: {
     color: "#22c55e",
     fontSize: 10,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 0.5,
   },
   statusBadgeTextDark: {
     color: "#fbbf24",
     fontSize: 10,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 0.5,
   },
 
   inviteRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  inviteCode: { color: "#22c55e", fontSize: 18, fontWeight: "900", letterSpacing: 2 },
+  inviteCode: { color: "#22c55e", fontSize: 18, fontFamily: font.black, letterSpacing: 2 },
 
   copyBtn: {
     width: 34,
@@ -3005,9 +3005,9 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: "center",
   },
-  sosTitle: { color: "#fee2e2", fontWeight: "900", letterSpacing: 1, fontSize: 12 },
-  sosWho: { color: "white", fontWeight: "900", fontSize: 14, marginTop: 2 },
-  sosCoords: { color: "#fecaca", fontWeight: "900", letterSpacing: 0.4, marginTop: 4 },
+  sosTitle: { color: "#fee2e2", fontFamily: font.black, letterSpacing: 1, fontSize: 12 },
+  sosWho: { color: "white", fontFamily: font.black, fontSize: 14, marginTop: 2 },
+  sosCoords: { color: "#fecaca", fontFamily: font.black, letterSpacing: 0.4, marginTop: 4 },
 
   sosBtns: { flexDirection: "column", gap: 8 },
   sosLiveBtn: {
@@ -3022,7 +3022,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
   },
-  sosLiveBtnText: { color: "#fee2e2", fontWeight: "900", letterSpacing: 1, fontSize: 12 },
+  sosLiveBtnText: { color: "#fee2e2", fontFamily: font.black, letterSpacing: 1, fontSize: 12 },
 
   sosCoordsBtn: {
     borderRadius: 12,
@@ -3036,16 +3036,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
   },
-  sosCoordsBtnText: { color: "#e2e8f0", fontWeight: "900", letterSpacing: 1, fontSize: 12 },
+  sosCoordsBtnText: { color: "#e2e8f0", fontFamily: font.black, letterSpacing: 1, fontSize: 12 },
 
   fleetInfoHint: {
     color: "#64748b",
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginTop: 10,
   },
-  noFleetHint: { color: "#64748b", fontSize: 12, marginTop: 12, fontWeight: "700" },
+  noFleetHint: { color: "#64748b", fontSize: 12, marginTop: 12, fontFamily: font.bold },
 
   list: { padding: 14 },
 
@@ -3114,7 +3114,7 @@ const styles = StyleSheet.create({
   subLabel: { color: colors.faint, fontSize: 12, marginTop: 2, fontFamily: font.bold },
   subLabelSOS: { color: "#fecaca" },
 
-  deviceLine: { color: "#475569", fontSize: 11, fontWeight: "700" },
+  deviceLine: { color: "#475569", fontSize: 11, fontFamily: font.bold },
   deviceLineRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3135,7 +3135,7 @@ const styles = StyleSheet.create({
   },
   gpsQualityText: {
     fontSize: 9,
-    fontWeight: "800",
+    fontFamily: font.bold,
     color: "#94a3b8",
     letterSpacing: 0.5,
   },
@@ -3157,7 +3157,7 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: "row", gap: 18 },
 
   stat: { flexDirection: "row", alignItems: "center", gap: 6 },
-  statText: { color: "#94a3b8", fontSize: 13, fontWeight: "700" },
+  statText: { color: "#94a3b8", fontSize: 13, fontFamily: font.bold },
   statTextSOS: { color: "#fee2e2" },
 
   cardActions: {
@@ -3210,7 +3210,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239, 68, 68, 0.30)",
   },
 
-  actionBtnText: { fontWeight: "900", fontSize: 12, letterSpacing: 0.6 },
+  actionBtnText: { fontFamily: font.black, fontSize: 12, letterSpacing: 0.6 },
   actionBtnTextSOS: { color: "#fee2e2" },
   actionBtnTextLight: { color: "#e2e8f0" },
 
@@ -3237,7 +3237,7 @@ const styles = StyleSheet.create({
   },
   modalHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  modalTitle: { color: "white", fontSize: 16, fontWeight: "900", letterSpacing: 0.6 },
+  modalTitle: { color: "white", fontSize: 16, fontFamily: font.black, letterSpacing: 0.6 },
   modalCloseBtn: {
     width: 34,
     height: 34,
@@ -3248,7 +3248,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  modalHint: { color: "#94a3b8", fontSize: 12, fontWeight: "700", marginTop: 10, lineHeight: 16 },
+  modalHint: { color: "#94a3b8", fontSize: 12, fontFamily: font.bold, marginTop: 10, lineHeight: 16 },
   modalInput: {
     marginTop: 12,
     backgroundColor: "#0b1220",
@@ -3258,10 +3258,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(148, 163, 184, 0.14)",
     color: "#e2e8f0",
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 1.2,
   },
-  modalError: { color: "#fca5a5", marginTop: 10, fontSize: 12, fontWeight: "800" },
+  modalError: { color: "#fca5a5", marginTop: 10, fontSize: 12, fontFamily: font.bold },
 
   // ✅ Fleet Type Selector styles (Switch Fleet modal)
   switchFleetTypeContainer: {
@@ -3281,13 +3281,13 @@ const styles = StyleSheet.create({
   },
   switchFleetTypeIndicatorText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.3,
   },
   switchFleetTypeLabel: {
     color: "#94a3b8",
     fontSize: 11,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginBottom: 10,
     letterSpacing: 0.3,
   },
@@ -3315,7 +3315,7 @@ const styles = StyleSheet.create({
   switchFleetTypeBtnText: {
     color: "#94a3b8",
     fontSize: 13,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
   switchFleetTypeBtnTextActive: {
     color: "#0b1220",
@@ -3325,7 +3325,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 10,
     textAlign: "center",
-    fontWeight: "600",
+    fontFamily: font.semi,
     fontStyle: "italic",
   },
 
@@ -3344,9 +3344,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(148, 163, 184, 0.16)",
   },
-  modalBtnGhostText: { color: "#e2e8f0", fontWeight: "900", letterSpacing: 0.6, fontSize: 12 },
+  modalBtnGhostText: { color: "#e2e8f0", fontFamily: font.black, letterSpacing: 0.6, fontSize: 12 },
   modalBtnPrimary: { backgroundColor: "#22c55e" },
-  modalBtnPrimaryText: { color: "#0b1220", fontWeight: "900", letterSpacing: 0.8, fontSize: 12 },
+  modalBtnPrimaryText: { color: "#0b1220", fontFamily: font.black, letterSpacing: 0.8, fontSize: 12 },
 
   // =========================
   // ✅ SOS PIN Section styles
@@ -3368,13 +3368,13 @@ const styles = StyleSheet.create({
   pinTitle: {
     color: "#e2e8f0",
     fontSize: 14,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 0.6,
   },
   pinDescription: {
     color: "#94a3b8",
     fontSize: 12,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginBottom: 12,
   },
   pinStatusRow: {
@@ -3386,7 +3386,7 @@ const styles = StyleSheet.create({
   pinStatusText: {
     color: "#94a3b8",
     fontSize: 13,
-    fontWeight: "800",
+    fontFamily: font.bold,
   },
   pinSetupBtn: {
     flexDirection: "row",
@@ -3401,14 +3401,14 @@ const styles = StyleSheet.create({
   },
   pinSetupBtnText: {
     color: "#0b1220",
-    fontWeight: "900",
+    fontFamily: font.black,
     fontSize: 13,
     letterSpacing: 0.8,
   },
   pinWarning: {
     color: "#fbbf24",
     fontSize: 11,
-    fontWeight: "700",
+    fontFamily: font.bold,
     lineHeight: 15,
   },
 
@@ -3427,7 +3427,7 @@ const styles = StyleSheet.create({
   pinWarningModal: {
     color: "#fbbf24",
     fontSize: 11,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginTop: 8,
     lineHeight: 15,
   },
@@ -3475,7 +3475,7 @@ const styles = StyleSheet.create({
   pinKeyText: {
     color: "#e2e8f0",
     fontSize: 24,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
   pinActionBtn: {
     marginTop: 16,
@@ -3487,7 +3487,7 @@ const styles = StyleSheet.create({
   },
   pinActionBtnText: {
     color: "#0b1220",
-    fontWeight: "900",
+    fontFamily: font.black,
     fontSize: 14,
     letterSpacing: 1,
   },
@@ -3498,7 +3498,7 @@ const styles = StyleSheet.create({
   },
   pinBackBtnText: {
     color: "#94a3b8",
-    fontWeight: "800",
+    fontFamily: font.bold,
     fontSize: 13,
   },
 
@@ -3523,7 +3523,7 @@ const styles = StyleSheet.create({
   },
   batteryBannerText: {
     color: "#fbbf24",
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.3,
     fontSize: 12,
     flex: 1,
@@ -3553,7 +3553,7 @@ const styles = StyleSheet.create({
   batteryWarningBadgeText: {
     color: "#fbbf24",
     fontSize: 10,
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.4,
   },
   batteryWarningBadgeTextCritical: {
@@ -3570,10 +3570,10 @@ const styles = StyleSheet.create({
   },
   statTextCritical: {
     color: "#ef4444",
-    fontWeight: "900",
+    fontFamily: font.black,
   },
   statTextLow: {
     color: "#fbbf24",
-    fontWeight: "900",
+    fontFamily: font.black,
   },
 });

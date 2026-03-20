@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { font } from "../../src/theme";
 
 export default function FamilyGuideScreen() {
   const router = useRouter();
@@ -321,7 +322,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: "#e2e8f0",
     fontSize: 18,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 0.5,
   },
   scroll: {
@@ -341,7 +342,7 @@ const styles = StyleSheet.create({
   introTitle: {
     color: "#22c55e",
     fontSize: 16,
-    fontWeight: "900",
+    fontFamily: font.black,
     marginBottom: 8,
   },
   introText: {
@@ -352,7 +353,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: "#64748b",
     fontSize: 12,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 1.5,
     marginBottom: 12,
     marginTop: 8,
@@ -373,13 +374,13 @@ const styles = StyleSheet.create({
   wakeWordTitle: {
     color: "#fee2e2",
     fontSize: 15,
-    fontWeight: "900",
+    fontFamily: font.black,
     marginBottom: 10,
   },
   wakeWordPhrase: {
     color: "#fecaca",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginBottom: 6,
     letterSpacing: 0.3,
   },
@@ -412,7 +413,7 @@ const styles = StyleSheet.create({
   methodTitle: {
     color: "#e2e8f0",
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
     marginBottom: 4,
   },
   methodDesc: {
@@ -442,7 +443,7 @@ const styles = StyleSheet.create({
   featureTitle: {
     color: "#e2e8f0",
     fontSize: 15,
-    fontWeight: "800",
+    fontFamily: font.bold,
     marginBottom: 4,
   },
   featureDesc: {
@@ -468,7 +469,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   privacyBold: {
-    fontWeight: "900",
+    fontFamily: font.black,
     color: "#86efac",
   },
   permissionCard: {
@@ -489,7 +490,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   permissionBold: {
-    fontWeight: "900",
+    fontFamily: font.black,
     color: "#fde047",
   },
   alertStepCard: {
@@ -511,7 +512,7 @@ const styles = StyleSheet.create({
   stepText: {
     color: "#fff",
     fontSize: 16,
-    fontWeight: "900",
+    fontFamily: font.black,
   },
   stepContent: {
     flex: 1,
@@ -519,7 +520,7 @@ const styles = StyleSheet.create({
   stepTitle: {
     color: "#e2e8f0",
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
     marginBottom: 4,
   },
   stepDesc: {

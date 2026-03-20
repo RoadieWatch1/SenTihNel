@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { font } from "../theme";
 import {
   View,
   Text,
@@ -373,7 +374,7 @@ const styles = StyleSheet.create({
   title: {
     color: "#e2e8f0",
     fontSize: 28,
-    fontWeight: "900",
+    fontFamily: font.black,
     marginBottom: 8,
   },
 
@@ -453,7 +454,7 @@ const styles = StyleSheet.create({
   saveBadgeText: {
     color: "#0b1220",
     fontSize: 10,
-    fontWeight: "900",
+    fontFamily: font.black,
   },
 
   productHeader: {
@@ -487,13 +488,13 @@ const styles = StyleSheet.create({
   productTitle: {
     color: "#e2e8f0",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   productPrice: {
     color: "#e2e8f0",
     fontSize: 24,
-    fontWeight: "900",
+    fontFamily: font.black,
     marginBottom: 2,
   },
 
@@ -506,7 +507,7 @@ const styles = StyleSheet.create({
     color: "#22c55e",
     fontSize: 11,
     marginTop: 8,
-    fontWeight: "600",
+    fontFamily: font.semi,
   },
 
   purchaseBtn: {
@@ -524,7 +525,7 @@ const styles = StyleSheet.create({
   purchaseBtnText: {
     color: "#0b1220",
     fontSize: 18,
-    fontWeight: "900",
+    fontFamily: font.black,
   },
 
   restoreBtn: {
@@ -535,7 +536,7 @@ const styles = StyleSheet.create({
   restoreBtnText: {
     color: "#64748b",
     fontSize: 14,
-    fontWeight: "600",
+    fontFamily: font.semi,
   },
 
   divider: {
@@ -613,7 +614,7 @@ const styles = StyleSheet.create({
   enterpriseBtnText: {
     color: "#22c55e",
     fontSize: 16,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   legalText: {

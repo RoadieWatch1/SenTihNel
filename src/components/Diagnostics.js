@@ -1,5 +1,6 @@
 // 📂 FILE: src/components/Diagnostics.js
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { font } from '../theme';
 import {
   View,
   Text,
@@ -294,7 +295,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1e293b',
   },
-  title: { color: '#fff', fontSize: 24, fontWeight: '800' },
+  title: { color: '#fff', fontSize: 24, fontFamily: font.bold },
   subtitle: { color: '#94a3b8', marginBottom: 18, fontSize: 14, lineHeight: 18 },
 
   row: {
@@ -306,10 +307,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1e293b',
   },
   info: { flex: 1, paddingRight: 10 },
-  label: { color: '#f8fafc', fontSize: 16, fontWeight: '800' },
+  label: { color: '#f8fafc', fontSize: 16, fontFamily: font.bold },
   desc: { color: '#64748b', fontSize: 12, marginTop: 6, lineHeight: 16 },
   extra: { color: '#94a3b8', fontSize: 11, marginTop: 6, lineHeight: 16 },
-  warning: { color: '#fbbf24', fontSize: 11, fontWeight: '900', marginTop: 8 },
+  warning: { color: '#fbbf24', fontSize: 11, fontFamily: font.black, marginTop: 8 },
 
   fixBtn: {
     backgroundColor: '#ef4444',
@@ -320,7 +321,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   settingsBtn: { backgroundColor: '#3b82f6' },
-  fixText: { color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 0.2 },
+  fixText: { color: '#fff', fontFamily: font.black, fontSize: 13, letterSpacing: 0.2 },
 
   btn: {
     backgroundColor: '#22c55e',
@@ -337,10 +338,10 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { backgroundColor: '#1e293b' },
 
-  btnText: { color: '#001b0b', fontWeight: '900', fontSize: 16 },
+  btnText: { color: '#001b0b', fontFamily: font.black, fontSize: 16 },
   btnTextDisabled: { color: '#94a3b8' },
-  btnTextAlt: { color: '#fff', fontWeight: '900', fontSize: 16 },
-  btnTextGhost: { color: '#e5e7eb', fontWeight: '900', fontSize: 14, letterSpacing: 0.3 },
+  btnTextAlt: { color: '#fff', fontFamily: font.black, fontSize: 16 },
+  btnTextGhost: { color: '#e5e7eb', fontFamily: font.black, fontSize: 14, letterSpacing: 0.3 },
 
   footerNote: { color: '#64748b', fontSize: 11, textAlign: 'center', marginTop: 12 },
 });

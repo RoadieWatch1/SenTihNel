@@ -20,6 +20,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../src/lib/supabase";
+import { font } from "../../src/theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -702,7 +703,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: "#e2e8f0",
     fontSize: 16,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 2,
   },
 
@@ -744,13 +745,13 @@ const styles = StyleSheet.create({
 
   statValue: {
     fontSize: 24,
-    fontWeight: "900",
+    fontFamily: font.black,
   },
 
   statLabel: {
     color: "#64748b",
     fontSize: 10,
-    fontWeight: "700",
+    fontFamily: font.bold,
     letterSpacing: 1,
     marginTop: 4,
   },
@@ -768,7 +769,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: "#94a3b8",
     fontSize: 12,
-    fontWeight: "700",
+    fontFamily: font.bold,
     letterSpacing: 1,
     textTransform: "uppercase",
     marginBottom: 12,
@@ -788,7 +789,7 @@ const styles = StyleSheet.create({
   inviteCodeLabel: {
     color: "#64748b",
     fontSize: 10,
-    fontWeight: "700",
+    fontFamily: font.bold,
     letterSpacing: 1.5,
     marginBottom: 6,
   },
@@ -796,7 +797,7 @@ const styles = StyleSheet.create({
   inviteCodeValue: {
     color: "#22c55e",
     fontSize: 24,
-    fontWeight: "900",
+    fontFamily: font.black,
     letterSpacing: 3,
     marginBottom: 8,
   },
@@ -823,7 +824,7 @@ const styles = StyleSheet.create({
   sosAlertText: {
     color: "#fca5a5",
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
   },
 
   memberCard: {
@@ -867,7 +868,7 @@ const styles = StyleSheet.create({
   memberName: {
     color: "#e2e8f0",
     fontSize: 16,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   statusBadge: {
@@ -879,7 +880,7 @@ const styles = StyleSheet.create({
 
   statusText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontFamily: font.bold,
     letterSpacing: 0.5,
   },
 
@@ -930,7 +931,7 @@ const styles = StyleSheet.create({
   actionBtnText: {
     color: "#22c55e",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   emptyList: {
@@ -941,7 +942,7 @@ const styles = StyleSheet.create({
   emptyListText: {
     color: "#64748b",
     fontSize: 16,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginTop: 12,
   },
 
@@ -977,7 +978,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     color: "#e2e8f0",
     fontSize: 20,
-    fontWeight: "800",
+    fontFamily: font.bold,
     marginTop: 20,
   },
 
@@ -1003,7 +1004,7 @@ const styles = StyleSheet.create({
   helpTitle: {
     color: "#94a3b8",
     fontSize: 13,
-    fontWeight: "700",
+    fontFamily: font.bold,
     marginBottom: 10,
   },
 
@@ -1022,7 +1023,7 @@ const styles = StyleSheet.create({
   errorTitle: {
     color: "#ef4444",
     fontSize: 20,
-    fontWeight: "800",
+    fontFamily: font.bold,
     marginTop: 20,
   },
 
@@ -1044,7 +1045,7 @@ const styles = StyleSheet.create({
   retryBtnText: {
     color: "#0b1220",
     fontSize: 14,
-    fontWeight: "800",
+    fontFamily: font.bold,
   },
 
   // Block button
@@ -1064,7 +1065,7 @@ const styles = StyleSheet.create({
   blockBtnText: {
     color: "#ef4444",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   // Blocked users section
@@ -1089,7 +1090,7 @@ const styles = StyleSheet.create({
   blockedSectionTitle: {
     color: "#94a3b8",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 
   blockedList: {
@@ -1123,7 +1124,7 @@ const styles = StyleSheet.create({
   blockedUserName: {
     color: "#e2e8f0",
     fontSize: 14,
-    fontWeight: "600",
+    fontFamily: font.semi,
   },
 
   blockedUserReason: {
@@ -1142,6 +1143,6 @@ const styles = StyleSheet.create({
   unblockBtnText: {
     color: "#22c55e",
     fontSize: 12,
-    fontWeight: "700",
+    fontFamily: font.bold,
   },
 });
