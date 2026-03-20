@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../src/lib/supabase";
 
@@ -35,6 +36,7 @@ const REFRESH_INTERVAL_MS = 15000;
 
 export default function ManagerDashboard() {
   const navigation = useNavigation();
+  const router = useRouter();
 
   // State
   const [loading, setLoading] = useState(true);
@@ -290,13 +292,9 @@ export default function ManagerDashboard() {
     );
   };
 
-  // Open drawer
+  // Go back to settings
   const openDrawer = () => {
-    try {
-      navigation.openDrawer();
-    } catch (e) {
-      console.log("Drawer open warning:", e?.message || e);
-    }
+    router.back();
   };
 
   // Get status color

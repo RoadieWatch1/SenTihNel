@@ -11,13 +11,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation, DrawerActions } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 
 export default function WorkGuideScreen() {
-  const navigation = useNavigation();
+  const router = useRouter();
 
   const goBackToDrawer = () => {
-    navigation.dispatch(DrawerActions.openDrawer());
+    router.back();
   };
 
   return (

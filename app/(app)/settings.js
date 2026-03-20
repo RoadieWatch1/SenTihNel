@@ -5,9 +5,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
   Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "../../src/lib/supabase";
@@ -111,6 +111,34 @@ export default function SettingsScreen() {
             iconColor={colors.green}
             label="Upgrade Plan"
             onPress={() => setShowPaywall(true)}
+          />
+        </View>
+
+        {/* Section: Guides */}
+        <Text style={styles.sectionLabel}>GUIDES</Text>
+        <View style={styles.section}>
+          <SettingsRow
+            icon="home-outline"
+            iconColor={colors.green}
+            label="Family Fleet Guide"
+            sublabel="How to use SenTihNel with family"
+            onPress={() => router.push("/(app)/family-guide")}
+          />
+          <View style={styles.divider} />
+          <SettingsRow
+            icon="briefcase-outline"
+            iconColor={colors.blue}
+            label="Work Fleet Guide"
+            sublabel="How to use SenTihNel at work"
+            onPress={() => router.push("/(app)/work-guide")}
+          />
+          <View style={styles.divider} />
+          <SettingsRow
+            icon="grid-outline"
+            iconColor={colors.amber}
+            label="Manager Dashboard"
+            sublabel="Work fleet owner tools"
+            onPress={() => router.push("/(app)/manager-dashboard")}
           />
         </View>
 
