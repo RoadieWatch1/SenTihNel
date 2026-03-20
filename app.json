@@ -7,9 +7,15 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#080E1A"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vizir.sentihnel",
+      "buildNumber": "1",
       "infoPlist": {
         "UIBackgroundModes": [
           "location",

@@ -16,7 +16,7 @@ import { useRouter } from "expo-router";
 export default function WorkGuideScreen() {
   const router = useRouter();
 
-  const goBackToDrawer = () => {
+  const goBack = () => {
     router.back();
   };
 
@@ -24,7 +24,7 @@ export default function WorkGuideScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={goBackToDrawer} style={styles.backBtn}>
+        <TouchableOpacity onPress={goBack} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#e2e8f0" />
         </TouchableOpacity>
         <View style={styles.headerTitleWrap}>

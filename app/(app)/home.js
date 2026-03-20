@@ -20,6 +20,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import * as Location from "expo-location";
@@ -54,6 +55,7 @@ function isGranted(status) {
 
 export default function HomePage() {
   const navigation = useNavigation();
+  const router = useRouter();
 
   const [isSOS, setIsSOS] = useState(false);
   const [deviceId, setDeviceId] = useState("Loading...");
@@ -384,7 +386,7 @@ export default function HomePage() {
         "You need to create an SOS PIN before activating the panic button. Go to Fleet to set it up.",
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Set Up PIN", onPress: () => navigation.navigate("fleet") },
+          { text: "Set Up PIN", onPress: () => router.push("/(app)/fleet") },
         ]
       );
       return;

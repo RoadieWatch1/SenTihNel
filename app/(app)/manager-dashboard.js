@@ -293,7 +293,7 @@ export default function ManagerDashboard() {
   };
 
   // Go back to settings
-  const openDrawer = () => {
+  const goBack = () => {
     router.back();
   };
 
@@ -438,8 +438,8 @@ export default function ManagerDashboard() {
   if (!loading && (!hasWorkFleet || !isOwner)) {
     return (
       <SafeAreaView style={styles.container}>
-        <TouchableOpacity onPress={openDrawer} style={styles.menuBtn}>
-          <Ionicons name="menu" size={28} color="#e5e7eb" />
+        <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
+          <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
         </TouchableOpacity>
 
         <View style={styles.centerContent}>
@@ -483,8 +483,8 @@ export default function ManagerDashboard() {
   if (error && members.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
-        <TouchableOpacity onPress={openDrawer} style={styles.menuBtn}>
-          <Ionicons name="menu" size={28} color="#e5e7eb" />
+        <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
+          <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
         </TouchableOpacity>
 
         <View style={styles.centerContent}>
@@ -511,8 +511,8 @@ export default function ManagerDashboard() {
     <View style={styles.container}>
       {/* Header */}
       <SafeAreaView style={styles.header} edges={["top"]}>
-        <TouchableOpacity onPress={openDrawer} style={styles.menuBtn}>
-          <Ionicons name="menu" size={28} color="#e5e7eb" />
+        <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
+          <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
