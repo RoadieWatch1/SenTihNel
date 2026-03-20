@@ -57,7 +57,7 @@ export default function SettingsScreen() {
           <Text style={styles.subHeaderTitle}>System Diagnostics</Text>
         </View>
         <ScrollView contentContainerStyle={{ padding: space.md }}>
-          <Diagnostics />
+          <Diagnostics onComplete={() => setShowDiagnostics(false)} />
         </ScrollView>
       </SafeAreaView>
     );
