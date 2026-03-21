@@ -21,7 +21,8 @@
         "buildType": "app-bundle"
       },
       "ios": {
-        "buildConfiguration": "Release"
+        "buildConfiguration": "Release",
+        "autoIncrement": true
       }
     }
   },
@@ -30,8 +31,7 @@
       "ios": {
         "appleId": "admin@sentihnel.com",
         "ascAppId": "6760852593",
-        "appleTeamId": "5G7AC95RK7",
-        "autoIncrement": true
+        "appleTeamId": "5G7AC95RK7"
       }
     }
   }
