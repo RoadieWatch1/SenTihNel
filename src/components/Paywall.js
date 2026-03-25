@@ -198,7 +198,7 @@ export default function Paywall({ onClose, onSuccess }) {
                     >
                       {isYearly && (
                         <View style={styles.saveBadge}>
-                          <Text style={styles.saveBadgeText}>SAVE 30%</Text>
+                          <Text style={styles.saveBadgeText}>SAVE 28%</Text>
                         </View>
                       )}
 
