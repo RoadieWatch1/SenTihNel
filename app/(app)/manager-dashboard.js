@@ -15,6 +15,8 @@ import {
   Platform,
   Linking,
   Alert,
+  StatusBar,
+  Share,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -404,13 +406,21 @@ export default function ManagerDashboard() {
         {/* Expanded view for selected member */}
         {isSelected && (
           <View style={styles.expandedActions}>
+            {member.status === "SOS" && (
+              <View style={styles.sosActions}>
+                <Ionicons name="warning" size={16} color="#ef4444" />
+                <Text style={styles.sosActionLabel}>MEMBER IN SOS — RESPOND NOW</Text>
+              </View>
+            )}
             {hasLocation && (
               <TouchableOpacity
-                style={styles.actionBtn}
+                style={member.status === "SOS" ? styles.actionBtnSOS : styles.actionBtn}
                 onPress={() => openInMaps(member.latitude, member.longitude, member.display_name || "Member")}
               >
-                <Ionicons name="navigate-outline" size={18} color="#22c55e" />
-                <Text style={styles.actionBtnText}>Open in Maps</Text>
+                <Ionicons name="navigate-outline" size={18} color={member.status === "SOS" ? "#ef4444" : "#22c55e"} />
+                <Text style={member.status === "SOS" ? styles.actionBtnTextSOS : styles.actionBtnText}>
+                  Navigate to Location
+                </Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
@@ -436,7 +446,9 @@ export default function ManagerDashboard() {
   // Not a Work fleet owner
   if (!loading && (!hasWorkFleet || !isOwner)) {
     return (
-      <SafeAreaView style={styles.container}>
+      <>
+        <StatusBar barStyle="light-content" />
+        <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
         <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
           <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
         </TouchableOpacity>
@@ -462,42 +474,49 @@ export default function ManagerDashboard() {
             </Text>
           </View>
         </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </>
     );
   }
 
   // Loading
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#22c55e" />
-          <Text style={styles.loadingText}>Loading Dashboard...</Text>
-        </View>
-      </SafeAreaView>
+      <>
+        <StatusBar barStyle="light-content" />
+        <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+          <View style={styles.centerContent}>
+            <ActivityIndicator size="large" color="#22c55e" />
+            <Text style={styles.loadingText}>Loading Dashboard...</Text>
+          </View>
+        </SafeAreaView>
+      </>
     );
   }
 
   // Error state
   if (error && members.length === 0) {
     return (
-      <SafeAreaView style={styles.container}>
-        <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
-          <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
-        </TouchableOpacity>
-
-        <View style={styles.centerContent}>
-          <Ionicons name="alert-circle-outline" size={64} color="#ef4444" />
-          <Text style={styles.errorTitle}>Error</Text>
-          <Text style={styles.errorSubtitle}>{error}</Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={() => fetchMemberLocations()}
-          >
-            <Text style={styles.retryBtnText}>Retry</Text>
+      <>
+        <StatusBar barStyle="light-content" />
+        <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+          <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
+            <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
           </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+
+          <View style={styles.centerContent}>
+            <Ionicons name="alert-circle-outline" size={64} color="#ef4444" />
+            <Text style={styles.errorTitle}>Error</Text>
+            <Text style={styles.errorSubtitle}>{error}</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => fetchMemberLocations()}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </>
     );
   }
 
@@ -507,9 +526,11 @@ export default function ManagerDashboard() {
   const offlineCount = members.filter((m) => m.status === "OFFLINE" || !m.status).length;
 
   return (
-    <View style={styles.container}>
+    <>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* Header */}
-      <SafeAreaView style={styles.header} edges={["top"]}>
+      <View style={styles.header}>
         <TouchableOpacity onPress={goBack} style={styles.menuBtn}>
           <Ionicons name="arrow-back" size={28} color="#e5e7eb" />
         </TouchableOpacity>
@@ -532,7 +553,7 @@ export default function ManagerDashboard() {
             <Ionicons name="refresh-outline" size={22} color="#e5e7eb" />
           )}
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
 
       <ScrollView
         style={styles.listContainer}
@@ -567,7 +588,17 @@ export default function ManagerDashboard() {
         {/* Invite Code Card */}
         <View style={styles.inviteCodeCard}>
           <Text style={styles.inviteCodeLabel}>FLEET INVITE CODE</Text>
-          <Text style={styles.inviteCodeValue}>{inviteCode || "—"}</Text>
+          <View style={styles.inviteCodeRow}>
+            <Text style={styles.inviteCodeValue}>{inviteCode || "—"}</Text>
+            {inviteCode ? (
+              <TouchableOpacity
+                style={styles.shareCodeBtn}
+                onPress={() => Share.share({ message: `Join my SenTihNel Work Fleet with code: ${inviteCode}` })}
+              >
+                <Ionicons name="share-outline" size={20} color="#22c55e" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
           <Text style={styles.inviteCodeHint}>
             Share this code with employees to join your Work fleet
           </Text>
@@ -661,7 +692,8 @@ export default function ManagerDashboard() {
           </View>
         )}
       </ScrollView>
-    </View>
+      </SafeAreaView>
+    </>
   );
 }
 
@@ -711,6 +743,7 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 12,
     marginTop: 2,
+    fontFamily: font.reg,
   },
 
   refreshBtn: {
@@ -802,10 +835,21 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
+  inviteCodeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  shareCodeBtn: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(34, 197, 94, 0.12)",
+  },
   inviteCodeHint: {
     color: "#64748b",
     fontSize: 12,
     textAlign: "center",
+    fontFamily: font.reg,
   },
 
   sosAlertBanner: {
@@ -897,18 +941,21 @@ const styles = StyleSheet.create({
   detailText: {
     color: "#94a3b8",
     fontSize: 13,
+    fontFamily: font.reg,
   },
 
   detailTextLink: {
     color: "#22c55e",
     fontSize: 13,
     textDecorationLine: "underline",
+    fontFamily: font.reg,
   },
 
   detailTextMuted: {
     color: "#475569",
     fontSize: 13,
     fontStyle: "italic",
+    fontFamily: font.reg,
   },
 
   expandedActions: {
@@ -934,6 +981,41 @@ const styles = StyleSheet.create({
     fontFamily: font.bold,
   },
 
+  actionBtnSOS: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.4)",
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+
+  actionBtnTextSOS: {
+    color: "#ef4444",
+    fontSize: 14,
+    fontFamily: font.bold,
+  },
+
+  sosActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(239, 68, 68, 0.10)",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+
+  sosActionLabel: {
+    color: "#fca5a5",
+    fontSize: 12,
+    fontFamily: font.bold,
+    letterSpacing: 0.5,
+  },
+
   emptyList: {
     alignItems: "center",
     padding: 40,
@@ -950,6 +1032,7 @@ const styles = StyleSheet.create({
     color: "#475569",
     fontSize: 13,
     marginTop: 6,
+    fontFamily: font.reg,
   },
 
   listLastUpdated: {
@@ -957,6 +1040,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: "center",
     marginTop: 16,
+    fontFamily: font.reg,
   },
 
   infoNote: {
@@ -972,6 +1056,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     flex: 1,
+    fontFamily: font.reg,
   },
 
   // Empty/Error states
@@ -989,6 +1074,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     lineHeight: 20,
     paddingHorizontal: 20,
+    fontFamily: font.reg,
   },
 
   helpBox: {
@@ -1012,12 +1098,14 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 13,
     lineHeight: 22,
+    fontFamily: font.reg,
   },
 
   loadingText: {
     color: "#64748b",
     fontSize: 14,
     marginTop: 16,
+    fontFamily: font.reg,
   },
 
   errorTitle: {
@@ -1032,6 +1120,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     marginTop: 10,
+    fontFamily: font.reg,
   },
 
   retryBtn: {
@@ -1103,6 +1192,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     padding: 16,
     fontStyle: "italic",
+    fontFamily: font.reg,
   },
 
   blockedUserCard: {
@@ -1131,6 +1221,7 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 12,
     marginTop: 2,
+    fontFamily: font.reg,
   },
 
   unblockBtn: {
