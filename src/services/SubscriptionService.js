@@ -283,34 +283,6 @@ const syncSubscriptionToSupabase = async (customerInfo) => {
 };
 
 // ============================================
-// ENTERPRISE CODE HANDLING
-// ============================================
-export const joinWithEnterpriseCode = async (code) => {
-  try {
-    const { data, error } = await supabase.rpc("join_with_enterprise_code", {
-      p_code: code,
-    });
-
-    if (error) throw error;
-
-    if (data?.success) {
-      // Clear cache to force refresh
-      await AsyncStorage.removeItem(STORAGE_KEY_SUB_CACHE);
-      return {
-        success: true,
-        companyName: data.company_name,
-        message: data.message,
-      };
-    }
-
-    return { success: false, error: data?.error || "Failed to join" };
-  } catch (e) {
-    console.log("❌ Enterprise join error:", e?.message || e);
-    return { success: false, error: e?.message };
-  }
-};
-
-// ============================================
 // GET ENTERPRISE DASHBOARD (for owners)
 // ============================================
 export const getEnterpriseDashboard = async () => {
@@ -384,7 +356,6 @@ export default {
   purchaseSubscription,
   restorePurchases,
   checkSubscriptionStatus,
-  joinWithEnterpriseCode,
   getEnterpriseDashboard,
   clearSubscriptionCache,
   openSubscriptionManagement,

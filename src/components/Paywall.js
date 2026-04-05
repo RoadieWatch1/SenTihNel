@@ -13,9 +13,9 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  TextInput,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,9 +30,7 @@ export default function Paywall({ onClose, onSuccess }) {
   const [purchasing, setPurchasing] = useState(false);
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [showEnterpriseCode, setShowEnterpriseCode] = useState(false);
-  const [enterpriseCode, setEnterpriseCode] = useState("");
-  const [enterpriseLoading, setEnterpriseLoading] = useState(false);
+  const [yearlySavingsPct, setYearlySavingsPct] = useState(null);
 
   // Load products
   useEffect(() => {
@@ -43,8 +41,17 @@ export default function Paywall({ onClose, onSuccess }) {
 
       // Select monthly by default
       const monthly = prods.find((p) => p.duration === "MONTHLY");
+      const yearly = prods.find((p) => p.duration === "ANNUAL");
       if (monthly) setSelectedProduct(monthly);
       else if (prods.length > 0) setSelectedProduct(prods[0]);
+
+      // Compute actual savings % from real store prices so badge is always accurate
+      if (monthly?.priceValue > 0 && yearly?.priceValue > 0) {
+        const pct = Math.round(
+          (1 - yearly.priceValue / (monthly.priceValue * 12)) * 100
+        );
+        if (pct > 0) setYearlySavingsPct(pct);
+      }
 
       setLoading(false);
     };
@@ -92,32 +99,6 @@ export default function Paywall({ onClose, onSuccess }) {
       Alert.alert("Error", e?.message || "Restore failed");
     } finally {
       setPurchasing(false);
-    }
-  };
-
-  // Handle enterprise code
-  const handleEnterpriseCode = async () => {
-    const code = enterpriseCode.trim();
-    if (!code) {
-      Alert.alert("Enter Code", "Please enter your enterprise code");
-      return;
-    }
-
-    setEnterpriseLoading(true);
-    try {
-      const result = await SubscriptionService.joinWithEnterpriseCode(code);
-
-      if (result.success) {
-        await refresh();
-        Alert.alert("Welcome!", result.message || "You have joined the team.");
-        onSuccess?.();
-      } else {
-        Alert.alert("Invalid Code", result.error || "Please check your code and try again.");
-      }
-    } catch (e) {
-      Alert.alert("Error", e?.message || "Failed to join");
-    } finally {
-      setEnterpriseLoading(false);
     }
   };
 
@@ -196,9 +177,9 @@ export default function Paywall({ onClose, onSuccess }) {
                       onPress={() => setSelectedProduct(product)}
                       activeOpacity={0.8}
                     >
-                      {isYearly && (
+                      {isYearly && yearlySavingsPct !== null && (
                         <View style={styles.saveBadge}>
-                          <Text style={styles.saveBadgeText}>SAVE 28%</Text>
+                          <Text style={styles.saveBadgeText}>SAVE {yearlySavingsPct}%</Text>
                         </View>
                       )}
 
@@ -261,67 +242,25 @@ export default function Paywall({ onClose, onSuccess }) {
             </>
           )}
 
-          {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>OR</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Enterprise Code Section */}
-          <TouchableOpacity
-            style={styles.enterpriseToggle}
-            onPress={() => setShowEnterpriseCode(!showEnterpriseCode)}
-          >
-            <Ionicons name="briefcase-outline" size={20} color="#64748b" />
-            <Text style={styles.enterpriseToggleText}>
-              Have an enterprise code?
-            </Text>
-            <Ionicons
-              name={showEnterpriseCode ? "chevron-up" : "chevron-down"}
-              size={18}
-              color="#64748b"
-            />
-          </TouchableOpacity>
-
-          {showEnterpriseCode && (
-            <View style={styles.enterpriseSection}>
-              <Text style={styles.enterpriseHint}>
-                If your employer provided an enterprise code, enter it below to
-                get free access.
-              </Text>
-
-              <TextInput
-                style={styles.enterpriseInput}
-                placeholder="Enter enterprise code"
-                placeholderTextColor="#475569"
-                value={enterpriseCode}
-                onChangeText={setEnterpriseCode}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.enterpriseBtn,
-                  enterpriseLoading && styles.enterpriseBtnDisabled,
-                ]}
-                onPress={handleEnterpriseCode}
-                disabled={enterpriseLoading}
-              >
-                {enterpriseLoading ? (
-                  <ActivityIndicator color="#22c55e" size="small" />
-                ) : (
-                  <Text style={styles.enterpriseBtnText}>Join Team</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-
           {/* Legal */}
           <Text style={styles.legalText}>
-            Payment will be charged to your {Platform.OS === "ios" ? "Apple ID" : "Google Play"} account.
-            Subscription auto-renews unless cancelled at least 24 hours before the end of the current period.
+            By subscribing, you agree to our{" "}
+            <Text
+              style={styles.legalLink}
+              onPress={() => Linking.openURL("https://sentihnel.com/terms")}
+            >
+              Terms of Use
+            </Text>
+            {" "}and{" "}
+            <Text
+              style={styles.legalLink}
+              onPress={() => Linking.openURL("https://sentihnel.com/privacy")}
+            >
+              Privacy Policy
+            </Text>
+            .{"\n\n"}
+            Payment will be charged to your {Platform.OS === "ios" ? "Apple ID" : "Google Play"} account at confirmation of purchase. Subscription automatically renews unless cancelled at least 24 hours before the end of the current period.{"\n\n"}
+            To cancel, go to {Platform.OS === "ios" ? "iPhone Settings → Apple ID → Subscriptions" : "Google Play → Subscriptions"}.
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -539,89 +478,16 @@ const styles = StyleSheet.create({
     fontFamily: font.semi,
   },
 
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 24,
-  },
-
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: "#1e293b",
-  },
-
-  dividerText: {
-    color: "#475569",
-    fontSize: 12,
-    marginHorizontal: 16,
-  },
-
-  enterpriseToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 12,
-  },
-
-  enterpriseToggleText: {
-    color: "#64748b",
-    fontSize: 14,
-  },
-
-  enterpriseSection: {
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 12,
-  },
-
-  enterpriseHint: {
-    color: "#64748b",
-    fontSize: 13,
-    textAlign: "center",
-    marginBottom: 16,
-  },
-
-  enterpriseInput: {
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: "#1e293b",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    color: "#e2e8f0",
-    fontSize: 16,
-    textAlign: "center",
-    letterSpacing: 2,
-    marginBottom: 12,
-  },
-
-  enterpriseBtn: {
-    backgroundColor: "rgba(34, 197, 94, 0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(34, 197, 94, 0.3)",
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-
-  enterpriseBtnDisabled: {
-    opacity: 0.7,
-  },
-
-  enterpriseBtnText: {
-    color: "#22c55e",
-    fontSize: 16,
-    fontFamily: font.bold,
-  },
-
   legalText: {
     color: "#475569",
     fontSize: 11,
     textAlign: "center",
-    lineHeight: 16,
+    lineHeight: 18,
     marginTop: 24,
+  },
+
+  legalLink: {
+    color: "#94a3b8",
+    textDecorationLine: "underline",
   },
 });

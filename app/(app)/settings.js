@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -149,7 +150,7 @@ export default function SettingsScreen() {
             icon="document-text-outline"
             iconColor={colors.muted}
             label="Privacy Policy"
-            onPress={() => Alert.alert("Privacy Policy", "Visit sentihnel.com/privacy for our full privacy policy.")}
+            onPress={() => Linking.openURL("https://sentihnel.com/privacy")}
           />
           <View style={styles.divider} />
           <SettingsRow
