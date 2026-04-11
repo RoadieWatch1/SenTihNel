@@ -7,10 +7,12 @@ import {
   ScrollView,
   Alert,
   Linking,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../src/lib/supabase";
 import Diagnostics from "../../src/components/Diagnostics";
 import Paywall from "../../src/components/Paywall";
@@ -23,6 +25,7 @@ export default function SettingsScreen() {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -42,6 +45,68 @@ export default function SettingsScreen() {
           onPress: async () => {
             setLoggingOut(true);
             await performLogout(router);
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "This will permanently delete your account and all your data — fleets, SOS history, and settings. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Are you sure?",
+              "Your account will be permanently deleted. You will be signed out immediately.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Yes, Delete My Account",
+                  style: "destructive",
+                  onPress: async () => {
+                    setDeleting(true);
+                    try {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (user) {
+                        const deviceId = await AsyncStorage.getItem("sentinel_device_id").catch(() => null);
+                        // Delete all user data from public tables
+                        await Promise.allSettled([
+                          supabase.from("push_tokens").delete().eq("user_id", user.id),
+                          supabase.from("user_sos_pins").delete().eq("user_id", user.id),
+                          supabase.from("group_members").delete().eq("user_id", user.id),
+                          ...(deviceId ? [
+                            supabase.from("devices").delete().eq("device_id", deviceId),
+                            supabase.from("tracking_sessions").delete().eq("device_id", deviceId),
+                          ] : [
+                            supabase.from("devices").delete().eq("user_id", user.id),
+                            supabase.from("tracking_sessions").delete().eq("user_id", user.id),
+                          ]),
+                        ]);
+                        // Delete groups the user owns
+                        await supabase.from("groups").delete().eq("owner_user_id", user.id);
+                        // Delete the auth account via RPC (requires delete_account function in Supabase)
+                        const { error: rpcError } = await supabase.rpc("delete_account");
+                        if (rpcError) {
+                          // RPC not available — fall back to sign out; account deletion completes via webhook
+                          console.warn("delete_account RPC not available:", rpcError.message);
+                        }
+                      }
+                    } catch (e) {
+                      console.warn("Account deletion error:", e?.message);
+                    } finally {
+                      setDeleting(false);
+                      await performLogout(router);
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]
@@ -168,11 +233,26 @@ export default function SettingsScreen() {
         <TouchableOpacity
           style={[styles.logoutBtn, loggingOut && { opacity: 0.6 }]}
           onPress={handleLogout}
-          disabled={loggingOut}
+          disabled={loggingOut || deleting}
           activeOpacity={0.8}
         >
           <Ionicons name="log-out-outline" size={18} color={colors.red} />
           <Text style={styles.logoutText}>{loggingOut ? "Signing out..." : "Sign Out"}</Text>
+        </TouchableOpacity>
+
+        {/* Delete Account */}
+        <TouchableOpacity
+          style={[styles.deleteBtn, (deleting || loggingOut) && { opacity: 0.6 }]}
+          onPress={handleDeleteAccount}
+          disabled={deleting || loggingOut}
+          activeOpacity={0.8}
+        >
+          {deleting ? (
+            <ActivityIndicator size="small" color={colors.red} />
+          ) : (
+            <Ionicons name="trash-outline" size={18} color={colors.red} />
+          )}
+          <Text style={styles.deleteText}>{deleting ? "Deleting account..." : "Delete Account"}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -302,7 +382,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: space.xs,
     marginHorizontal: space.md,
-    marginBottom: space.xl,
+    marginBottom: space.sm,
     paddingVertical: space.md,
     borderRadius: radius.md,
     backgroundColor: colors.redDim,
@@ -313,6 +393,24 @@ const styles = StyleSheet.create({
     color: colors.red,
     fontSize: 15,
     fontFamily: font.bold,
+  },
+  deleteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: space.xs,
+    marginHorizontal: space.md,
+    marginBottom: space.xl,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: colors.redBorder,
+  },
+  deleteText: {
+    color: colors.red,
+    fontSize: 14,
+    fontFamily: font.semi,
   },
   subHeader: {
     flexDirection: "row",

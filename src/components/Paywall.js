@@ -193,7 +193,7 @@ export default function Paywall({ onClose, onSuccess }) {
                           {isSelected && <View style={styles.radioInner} />}
                         </View>
                         <Text style={styles.productTitle}>
-                          {isMonthly ? "Monthly" : "Yearly"}
+                          {product.title || (isMonthly ? "Monthly" : "Yearly")}
                         </Text>
                       </View>
 

@@ -39,7 +39,6 @@ async function initAudio() {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       playsInSilentModeIOS: true, // CRITICAL: Play even in silent mode
-      staysActiveInBackground: true, // Keep playing in background
       shouldDuckAndroid: false, // Don't lower other audio
       playThroughEarpieceAndroid: false, // Use speaker, not earpiece
     });

@@ -19,11 +19,10 @@
         "UIBackgroundModes": [
           "location",
           "fetch",
-          "remote-notification",
-          "audio"
+          "remote-notification"
         ],
-        "NSSpeechRecognitionUsageDescription": "SenTihNel uses speech recognition to detect emergency wake phrases (such as 'I'm feeling sick') so you can trigger an SOS alert hands-free.",
-        "NSMicrophoneUsageDescription": "SenTihNel listens for emergency wake phrases to trigger an SOS alert hands-free, even when your phone is in your pocket.",
+        "NSSpeechRecognitionUsageDescription": "SenTihNel uses speech recognition to detect emergency wake phrases while you are actively using the app, so you can trigger an SOS alert hands-free.",
+        "NSMicrophoneUsageDescription": "SenTihNel uses the microphone to detect emergency wake phrases while you are actively using the app, so you can trigger an SOS alert hands-free.",
         "NSCameraUsageDescription": "SenTihNel uses the camera to stream live video to your fleet during an SOS emergency.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "SenTihNel needs your location in the background to share your position with your fleet during an emergency.",
         "NSLocationWhenInUseUsageDescription": "SenTihNel needs your location to share your position with your fleet during an emergency.",
@@ -64,8 +63,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow SenTihNel to access your camera for security.",
-          "microphonePermission": "Allow SenTihNel to hear the wake word."
+          "cameraPermission": "SenTihNel uses the camera to stream live video to your fleet during an SOS emergency.",
+          "microphonePermission": "SenTihNel uses the microphone to detect emergency wake phrases while you are actively using the app, so you can trigger an SOS alert hands-free."
         }
       ],
       [
@@ -81,8 +80,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow SenTihNel to use the microphone.",
-          "speechRecognitionPermission": "Allow SenTihNel to use speech recognition."
+          "microphonePermission": "SenTihNel uses the microphone to detect emergency wake phrases while you are actively using the app, so you can trigger an SOS alert hands-free.",
+          "speechRecognitionPermission": "SenTihNel uses speech recognition to detect emergency wake phrases while you are actively using the app, so you can trigger an SOS alert hands-free."
         }
       ],
       [
