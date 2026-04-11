@@ -3047,7 +3047,7 @@ const styles = StyleSheet.create({
   },
   noFleetHint: { color: "#64748b", fontSize: 12, marginTop: 12, fontFamily: font.bold },
 
-  list: { padding: 14 },
+  list: { padding: 14, paddingBottom: 120 },
 
   card: {
     backgroundColor: colors.surfaceHigh,

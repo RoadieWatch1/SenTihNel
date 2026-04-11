@@ -122,7 +122,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           <Text style={styles.subHeaderTitle}>System Diagnostics</Text>
         </View>
-        <ScrollView contentContainerStyle={{ padding: space.md }}>
+        <ScrollView contentContainerStyle={{ padding: space.md, paddingBottom: 120 }}>
           <Diagnostics onComplete={() => setShowDiagnostics(false)} />
         </ScrollView>
       </SafeAreaView>
@@ -144,8 +144,11 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
@@ -278,6 +281,9 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  scrollContent: {
+    paddingBottom: 120, // clears the 60px tab bar + iPhone home indicator + breathing room
   },
   header: {
     paddingHorizontal: space.lg,

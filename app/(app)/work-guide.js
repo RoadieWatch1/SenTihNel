@@ -472,6 +472,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+    paddingBottom: 120,
   },
   introCard: {
     backgroundColor: "rgba(59, 130, 246, 0.10)",
