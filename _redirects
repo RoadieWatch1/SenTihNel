@@ -10,4 +10,7 @@
 /confirm     /confirm/index.html 200
 /confirm/*   /confirm/index.html 200
 
+/terms       /terms/index.html   200
+/terms/*     /terms/index.html   200
+
 /*           /index.html         200
